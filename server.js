@@ -28,6 +28,9 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/webhook/whatsapp', async (req, res) => {
+  console.log("WEBHOOK HIT!");
+  console.log(req.body);
+
   const incomingMessage = req.body.Body || '';
 
   console.log('WhatsApp Message:', incomingMessage);
