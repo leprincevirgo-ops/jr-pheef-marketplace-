@@ -46,7 +46,6 @@ async function saveListing(message, phone) {
     return false;
   }
 }
-}
     // End of saveListing()
 async function findListings(item, location, budget) {
   let query = supabase
