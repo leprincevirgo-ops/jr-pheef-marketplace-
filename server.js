@@ -4,6 +4,21 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SECRET_KEY
 );
+async function saveListing(item, location, phone) {
+  const { error } = await supabase
+    .from('listings')
+    .insert([
+      {
+        item,
+        location,
+        phone
+      }
+    ]);
+
+  if (error) {
+    console.error(error);
+  }
+}
 const app = express();
 
 app.use(express.urlencoded({ extended: false }));
