@@ -28,7 +28,7 @@ app.get('/', (req, res) => {
   res.send('🚀 JR PHEEF IS LIVE - Find. Match. Trade.');
 });
 
-app.post('/api/webhook/whatsapp', (req, res) => {
+app.post('/api/webhook/whatsapp', async (req, res) => {
   const incomingMessage = req.body.Body || '';
 
   console.log('WhatsApp Message:', incomingMessage);
