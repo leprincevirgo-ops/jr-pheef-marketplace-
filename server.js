@@ -94,15 +94,36 @@ Reply with:
 SELL
 BUY`;
 
-  if (message.toUpperCase() === "BUY") {
+if (message.toUpperCase().startsWith("BUY")) {
 
-    reply =
-`🛒 Tell us what you are looking for.
+    const lines = message.split("\n");
 
-Example:
+    const item = lines[1] || "";
+    const location = lines[2] || "";
+    const budget = parseInt((lines[3] || "").replace(/[^0-9]/g, "")) || null;
 
-Toyota Axio
-Nairobi`;
+    const results = await findListings(item, location, budget);
+
+    if (results.length > 0) {
+        const first = results[0];
+
+        reply =
+`✅ Match Found!
+
+Item: ${first.item_name}
+Price: KSh ${first.price}
+Location: ${first.location}
+
+Seller:
+${first.phone}`;
+    } else {
+        reply =
+`😔 No matching items found.
+
+We will notify you when a seller lists one.`;
+    }
+
+} 
 
   } else if (message.toUpperCase().startsWith("SELL")) {
 
