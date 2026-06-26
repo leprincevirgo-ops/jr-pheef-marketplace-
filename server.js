@@ -6,15 +6,14 @@ const supabase = createClient(
 );
 async function saveListing(item, location, phone) {
   const { error } = await supabase
-    .from('listings')
-    .insert([
-      {
-        item,
-        location,
-        phone
-      }
-    ]);
-
+    
+  .from('listings')
+  .insert([
+    {
+      item_name: item,
+      phone: phone
+    }
+  ]); 
   if (error) {
     console.error(error);
   }
