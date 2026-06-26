@@ -35,17 +35,17 @@ app.post('/api/webhook/whatsapp', (req, res) => {
 
   let reply =
     '👋 Welcome to JR PHEEF.\n\nFind. Match. Trade.\n\nSend:\nBUY - if you are looking for something\nSELL - if you are selling something';
+if (incomingMessage.toUpperCase().includes('BUY')) {
+  reply =
+    '🛒 What are you looking for? Tell JR PHEEF the item and your location.';
+      }
+if (incomingMessage.toUpperCase().includes('SELL')) {
+  const phone = req.body.From;
+  await saveListing(incomingMessage, "Unknown", phone);
 
-  if (incomingMessage.toUpperCase().includes('BUY')) {
-    reply =
-      '🛒 What are you looking for? Tell JR PHEEF the item and your location.';
-  }
-
-  if (incomingMessage.toUpperCase().includes('SELL')) {
-    reply =
-      '📦 What are you selling? Send item name, price and location.';
-  }
-
+  reply =
+    '✅ Your item has been received by JR PHEEF!\n\nOur marketplace is matching you with buyers.';
+}
   res.set('Content-Type', 'text/xml');
 
   res.send(`
