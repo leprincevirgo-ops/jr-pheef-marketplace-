@@ -46,7 +46,35 @@ async function saveListing(message, phone) {
     return false;
   }
 }
+}
+    // End of saveListing()
+async function findListings(item, location, budget) {
+  let query = supabase
+    .from("listings")
+    .select("*")
+    .eq("status", "ACTIVE");
 
+  if (item) {
+    query = query.ilike("item_name", `%${item}%`);
+  }
+
+  if (location) {
+    query = query.ilike("location", `%${location}%`);
+  }
+
+  if (budget) {
+    query = query.lte("price", budget);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error(error);
+    return [];
+  }
+
+  return data;
+      }
 app.get("/", (req, res) => {
   res.send("🚀 JR PHEEF Marketplace is LIVE");
 });
