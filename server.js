@@ -122,9 +122,6 @@ ${first.phone}`;
 
 We will notify you when a seller lists one.`;
     }
-
-} 
-
   } else if (message.toUpperCase().startsWith("SELL")) {
 
     const saved = await saveListing(message, phone);
