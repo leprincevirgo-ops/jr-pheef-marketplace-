@@ -1,6 +1,11 @@
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
+const twilio = require("twilio");
 
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
 const app = express();
 
 app.use(express.urlencoded({ extended: false }));
@@ -171,7 +176,6 @@ CHAT ${roomId}`
 });
 
 return res.send("✅ Message sent.");
-return res.send("✅ Message sent."); 
 }
   let reply =
 `👋 Welcome to JR PHEEF Marketplace
