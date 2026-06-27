@@ -74,6 +74,29 @@ async function findListings(item, location, budget) {
 
   return data;
       }
+async function createDealRoom(listing, buyerPhone) {
+  const { data, error } = await supabase
+    .from("deal_rooms")
+    .insert([
+      {
+        listing_id: listing.id,
+        buyer_phone: buyerPhone,
+        seller_phone: listing.phone,
+        status: "negotiating",
+        buyer_paid: false,
+        seller_paid: false
+      }
+    ])
+    .select()
+    .single();
+
+  if (error) {
+    console.error(error);
+    return null;
+  }
+
+  return data;
+}
 app.get("/", (req, res) => {
   res.send("🚀 JR PHEEF Marketplace is LIVE");
 });
