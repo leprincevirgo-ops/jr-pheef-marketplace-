@@ -137,7 +137,42 @@ app.post("/api/webhook/whatsapp", async (req, res) => {
 
   const message = (req.body.Body || "").trim();
   const phone = req.body.From || "";
+if (message.toUpperCase().startsWith("CHAT ")) {
+  const lines = message.split("\n");
+  const roomId = lines[0].replace(/^CHAT\s+/i, "").trim();
+  const chatMessage = lines.slice(1).join("\n").trim();
 
+  if (!chatMessage) {
+    return res.send("Please type your message after the room ID.");
+  }
+
+const room = await getDealRoom(roomId);
+
+if (!room) {
+  return res.send("Deal Room not found.");
+}
+
+await saveMessage(roomId, phone, chatMessage);
+const recipient =
+  phone === room.buyer_phone
+    ? room.seller_phone
+    : room.buyer_phone;
+await client.messages.create({
+  from: process.env.TWILIO_WHATSAPP_NUMBER,
+  to: recipient,
+  body:
+`💬 Deal Room
+
+${chatMessage}
+
+Reply:
+
+CHAT ${roomId}`
+});
+
+return res.send("✅ Message sent.");
+return res.send("✅ Message sent."); 
+}
   let reply =
 `👋 Welcome to JR PHEEF Marketplace
 
