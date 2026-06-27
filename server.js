@@ -111,6 +111,22 @@ async function getDealRoom(roomId) {
 
   return data;
 }
+async function saveMessage(roomId, senderPhone, message) {
+  const { error } = await supabase
+    .from("messages")
+    .insert([{
+      room_id: roomId,
+      sender_phone: senderPhone,
+      message: message
+    }]);
+
+  if (error) {
+    console.error(error);
+    return false;
+  }
+
+  return true;
+}
 app.get("/", (req, res) => {
   res.send("🚀 JR PHEEF Marketplace is LIVE");
 });
