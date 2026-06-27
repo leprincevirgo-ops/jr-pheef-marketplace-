@@ -129,15 +129,33 @@ if (message.toUpperCase().startsWith("BUY")) {
     if (results.length > 0) {
         const first = results[0];
 
-        reply =
-`✅ Match Found!
+  const room = await createDealRoom(first, phone);
+
+if (room) {
+  reply = `
+✅ Match Found!
 
 Item: ${first.item_name}
 Price: KSh ${first.price}
 Location: ${first.location}
 
-Seller:
-${first.phone}`;
+A secure Deal Room has been created.
+
+Reply:
+
+CHAT ${room.id}
+
+to begin negotiating safely.
+
+🔒 JR PHEEF will keep both buyer and seller anonymous until both pay the KSh 30 connection fee.
+`;
+} else {
+  reply = `
+❌ We found a seller but could not create a Deal Room.
+
+Please try again.
+`;
+          }
     } else {
         reply =
 `😔 No matching items found.
