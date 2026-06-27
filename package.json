@@ -7,6 +7,5 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "@supabase/supabase-js": "^2.50.0"
-  }
-} 
+    "@supabase/supabase-js": "^2.50.0",
+    "twilio": "^5.5.4" 
