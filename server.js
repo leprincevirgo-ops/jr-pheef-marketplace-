@@ -97,6 +97,20 @@ async function createDealRoom(listing, buyerPhone) {
 
   return data;
 }
+async function getDealRoom(roomId) {
+  const { data, error } = await supabase
+    .from("deal_rooms")
+    .select("*")
+    .eq("id", roomId)
+    .single();
+
+  if (error) {
+    console.error(error);
+    return null;
+  }
+
+  return data;
+}
 app.get("/", (req, res) => {
   res.send("🚀 JR PHEEF Marketplace is LIVE");
 });
