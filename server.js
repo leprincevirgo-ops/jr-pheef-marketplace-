@@ -141,7 +141,7 @@ app.post("/api/webhook/whatsapp", async (req, res) => {
   console.log("Webhook received");
 
   const message = (req.body.Body || "").trim();
-  const phone = req.body.From || "";
+  const phone = (req.body.From || "").replace("whatsapp:", "");
 if (message.toUpperCase().startsWith("CHAT ")) {
   const lines = message.split("\n");
   const roomId = lines[0].replace(/^CHAT\s+/i, "").trim();
@@ -164,7 +164,7 @@ const recipient =
     : room.buyer_phone;
 await client.messages.create({
   from: process.env.TWILIO_WHATSAPP_NUMBER,
-  to: recipient,
+  to: `whatsapp:${recipient}`, 
   body:
 `💬 Deal Room
 
