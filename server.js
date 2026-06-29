@@ -162,6 +162,10 @@ const recipient =
   phone === room.buyer_phone
     ? room.seller_phone
     : room.buyer_phone;
+  console.log("Sender:", phone);
+console.log("Buyer:", room.buyer_phone);
+console.log("Seller:", room.seller_phone);
+console.log("Recipient:", recipient);
 await client.messages.create({
   from: process.env.TWILIO_WHATSAPP_NUMBER,
   to: `whatsapp:${recipient}`, 
