@@ -268,6 +268,37 @@ after payment.
 Waiting for the other party to agree.
 `);
             }
+  if (message.toUpperCase().startsWith("PAID ")) {
+
+  const roomId = message.replace(/^PAID\s+/i, "").trim();
+
+  const room = await updatePayment(roomId, phone);
+
+  if (!room) {
+    return res.send("Deal Room not found.");
+  }
+
+  if (room.buyer_paid && room.seller_paid) {
+
+    return res.send(`
+🎉 Payment confirmed!
+
+Buyer: ${room.buyer_phone}
+
+Seller: ${room.seller_phone}
+
+You may now continue your transaction directly.
+
+Thank you for using JR PHEEF Marketplace.
+`);
+  }
+
+  return res.send(`
+✅ Payment recorded.
+
+Waiting for the other party to pay.
+`);
+  }
   let reply =
 `👋 Welcome to JR PHEEF Marketplace
 
