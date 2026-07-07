@@ -208,6 +208,39 @@ CHAT ${roomId}`
 
 return res.send("✅ Message sent.");
 }
+  if (message.toUpperCase().startsWith("AGREE ")) {
+
+  const roomId = message.replace(/^AGREE\s+/i, "").trim();
+
+  const room = await updateAgreement(roomId, phone);
+
+  if (!room) {
+    return res.send("Deal Room not found.");
+  }
+
+  if (room.buyer_agreed && room.seller_agreed) {
+
+    return res.send(`
+🎉 Both buyer and seller have agreed!
+
+To unlock each other's contact details:
+
+💰 Pay KSh 30 via M-Pesa.
+
+Reply with:
+
+PAID ${roomId}
+
+after payment.
+`);
+  }
+
+  return res.send(`
+✅ Your agreement has been recorded.
+
+Waiting for the other party to agree.
+`);
+            }
   let reply =
 `👋 Welcome to JR PHEEF Marketplace
 
