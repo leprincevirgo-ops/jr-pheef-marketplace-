@@ -132,6 +132,33 @@ async function saveMessage(roomId, senderPhone, message) {
 
   return true;
 }
+async function updateAgreement(roomId, phone) {
+  const room = await getDealRoom(roomId);
+
+  if (!room) return null;
+
+  const updates = {};
+
+  if (phone === room.buyer_phone) {
+    updates.buyer_agreed = true;
+  } else if (phone === room.seller_phone) {
+    updates.seller_agreed = true;
+  }
+
+  const { data, error } = await supabase
+    .from("deal_rooms")
+    .update(updates)
+    .eq("id", roomId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error(error);
+    return null;
+  }
+
+  return data;
+            }
 app.get("/", (req, res) => {
   res.send("🚀 JR PHEEF Marketplace is LIVE");
 });
