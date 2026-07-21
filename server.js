@@ -321,7 +321,21 @@ if (message.toUpperCase().startsWith("BUY")) {
         const first = results[0];
 
   const room = await createDealRoom(first, phone);
+if (room) {
+  await client.messages.create({
+    from: process.env.TWILIO_WHATSAPP_NUMBER,
+    to: `whatsapp:${first.phone}`,
+    body: `🎉 A buyer has been matched with your listing.
 
+Your secure Deal Room is ready.
+
+Reply:
+
+CHAT ${room.id}
+
+to start negotiating safely.`
+  });
+}
 if (room) {
   reply = `
 ✅ Match Found!
