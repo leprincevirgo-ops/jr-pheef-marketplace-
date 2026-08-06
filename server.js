@@ -368,18 +368,18 @@ Please try again.
 
 We will notify you when a seller lists one.`;
     }
-  } } else if (message.toUpperCase().startsWith("OPPORTUNITY")) { {
+  }  else if (message.toUpperCase().startsWith("OPPORTUNITY")) {
 
     const saved = await saveListing(message, phone);
 
     if (saved) {
 
       reply =
-`✅ Your item has been received!
+✅ Your opportunity has been submitted!
 
-JR PHEEF is now matching you with buyers.
+JR PHEEF is now matching you with people looking for this opportunity.
 
-Thank you for using JR PHEEF Marketplace.`;
+Thank you for using JR PHEEF. 
 
     } else {
 
