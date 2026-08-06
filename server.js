@@ -299,15 +299,16 @@ Thank you for using JR PHEEF Marketplace.
 Waiting for the other party to pay.
 `);
   }
-  let reply =
-`👋 Welcome to JR PHEEF Marketplace
+let reply =
+`👋 Welcome to JR PHEEF
+
+We help people FIND and CREATE opportunities.
 
 Reply with:
 
-SELL
-BUY`;
-
-if (message.toUpperCase().startsWith("BUY")) {
+OPPORTUNITY
+FIND`; 
+if (message.toUpperCase().startsWith("FIND")) { {
 
     const lines = message.split("\n");
 
@@ -367,7 +368,7 @@ Please try again.
 
 We will notify you when a seller lists one.`;
     }
-  } else if (message.toUpperCase().startsWith("SELL")) {
+  } } else if (message.toUpperCase().startsWith("OPPORTUNITY")) { {
 
     const saved = await saveListing(message, phone);
 
