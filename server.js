@@ -220,19 +220,19 @@ const recipient =
 console.log("Buyer:", room.buyer_phone);
 console.log("Seller:", room.seller_phone);
 console.log("Recipient:", recipient);
-await client.messages.create({
+  await client.messages.create({
   from: process.env.TWILIO_WHATSAPP_NUMBER,
-  to: `whatsapp:${recipient}`, 
-  body: `💬 Deal Room
+  to: `whatsapp:${recipient}`,
+  body: `💬 Deal Room 
 
 ${chatMessage}
 
 Reply:
 
-CHAT ${roomId}` 
+CHAT ${roomId}`
+});
 
-return res.send("✅ Message sent.");
-}
+return res.send("☑ Message sent.");} 
   if (message.toUpperCase().startsWith("AGREE ")) {
 
   const roomId = message.replace(/^AGREE\s+/i, "").trim();
