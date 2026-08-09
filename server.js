@@ -223,15 +223,13 @@ console.log("Recipient:", recipient);
 await client.messages.create({
   from: process.env.TWILIO_WHATSAPP_NUMBER,
   to: `whatsapp:${recipient}`, 
-  body:
-`💬 Deal Room
+  body: `💬 Deal Room
 
 ${chatMessage}
 
 Reply:
 
-CHAT ${roomId}`
-});
+CHAT ${roomId}` 
 
 return res.send("✅ Message sent.");
 }
