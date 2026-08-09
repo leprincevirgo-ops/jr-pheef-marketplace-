@@ -232,7 +232,8 @@ Reply:
 CHAT ${roomId}`
 });
 
-return res.send("☑ Message sent.");} 
+return res.send("☑ Message sent.");
+} 
   if (message.toUpperCase().startsWith("AGREE ")) {
 
   const roomId = message.replace(/^AGREE\s+/i, "").trim();
