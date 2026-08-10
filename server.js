@@ -515,20 +515,4 @@ app.listen(PORT, () => {
   console.log(
     `JR PHEEF running on port ${PORT}`
   );
-});    }
-  }
-
-  res.set("Content-Type", "text/xml");
-
-  res.send(`
-<Response>
-<Message>${reply}</Message>
-</Response>
-`);
-});
-
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`JR PHEEF running on port ${PORT}`);
 });
