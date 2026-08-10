@@ -6,6 +6,7 @@ const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
+
 const app = express();
 
 app.use(express.urlencoded({ extended: false }));
@@ -25,7 +26,8 @@ async function saveListing(message, phone) {
     const priceText = lines[2] || "";
     const town = lines[3] || "";
 
-    const price = parseInt(priceText.replace(/[^0-9]/g, "")) || null;
+    const price =
+      parseInt(priceText.replace(/[^0-9]/g, "")) || null;
 
     const { error } = await supabase
       .from("listings")
@@ -51,7 +53,8 @@ async function saveListing(message, phone) {
     return false;
   }
 }
-    // End of saveListing()
+
+// Find listings
 async function findListings(item, location, budget) {
   let query = supabase
     .from("listings")
@@ -59,11 +62,17 @@ async function findListings(item, location, budget) {
     .eq("status", "ACTIVE");
 
   if (item) {
-    query = query.ilike("item_name", `%${item}%`);
+    query = query.ilike(
+      "item_name",
+      `%${item}%`
+    );
   }
 
   if (location) {
-    query = query.ilike("location", `%${location}%`);
+    query = query.ilike(
+      "location",
+      `%${location}%`
+    );
   }
 
   if (budget) {
@@ -78,7 +87,9 @@ async function findListings(item, location, budget) {
   }
 
   return data;
-      }
+}
+
+// Create Deal Room
 async function createDealRoom(listing, buyerPhone) {
   const { data, error } = await supabase
     .from("deal_rooms")
@@ -102,6 +113,8 @@ async function createDealRoom(listing, buyerPhone) {
 
   return data;
 }
+
+// Get Deal Room
 async function getDealRoom(roomId) {
   const { data, error } = await supabase
     .from("deal_rooms")
@@ -116,14 +129,18 @@ async function getDealRoom(roomId) {
 
   return data;
 }
+
+// Save message
 async function saveMessage(roomId, senderPhone, message) {
   const { error } = await supabase
     .from("messages")
-    .insert([{
-      room_id: roomId,
-      sender_phone: senderPhone,
-      message: message
-    }]);
+    .insert([
+      {
+        room_id: roomId,
+        sender_phone: senderPhone,
+        message: message
+      }
+    ]);
 
   if (error) {
     console.error(error);
@@ -132,10 +149,14 @@ async function saveMessage(roomId, senderPhone, message) {
 
   return true;
 }
+
+// Update agreement
 async function updateAgreement(roomId, phone) {
   const room = await getDealRoom(roomId);
 
-  if (!room) return null;
+  if (!room) {
+    return null;
+  }
 
   const updates = {};
 
@@ -158,11 +179,15 @@ async function updateAgreement(roomId, phone) {
   }
 
   return data;
-            }
+}
+
+// Update payment
 async function updatePayment(roomId, phone) {
   const room = await getDealRoom(roomId);
 
-  if (!room) return null;
+  if (!room) {
+    return null;
+  }
 
   const updates = {};
 
@@ -185,68 +210,102 @@ async function updatePayment(roomId, phone) {
   }
 
   return data;
-  }
+}
+
+// Home
 app.get("/", (req, res) => {
   res.send("🚀 JR PHEEF Marketplace is LIVE");
 });
 
+// WhatsApp webhook
 app.post("/api/webhook/whatsapp", async (req, res) => {
-
   console.log("Webhook received");
 
   const message = (req.body.Body || "").trim();
-  const phone = (req.body.From || "").replace("whatsapp:", "");
-if (message.toUpperCase().startsWith("CHAT ")) {
-  const lines = message.split("\n");
-  const roomId = lines[0].replace(/^CHAT\s+/i, "").trim();
-  const chatMessage = lines.slice(1).join("\n").trim();
 
-  if (!chatMessage) {
-    return res.send("Please type your message after the room ID.");
-  }
+  const phone = (req.body.From || "")
+    .replace("whatsapp:", "");
 
-const room = await getDealRoom(roomId);
+  // =========================
+  // CHAT
+  // =========================
+  if (message.toUpperCase().startsWith("CHAT ")) {
+    const lines = message.split("\n");
 
-if (!room) {
-  return res.send("Deal Room not found.");
-}
+    const roomId = lines[0]
+      .replace(/^CHAT\s+/i, "")
+      .trim();
 
-await saveMessage(roomId, phone, chatMessage);
-const recipient =
-  phone === room.buyer_phone
-    ? room.seller_phone
-    : room.buyer_phone;
-  console.log("Sender:", phone);
-console.log("Buyer:", room.buyer_phone);
-console.log("Seller:", room.seller_phone);
-console.log("Recipient:", recipient);
-  await client.messages.create({
-  from: process.env.TWILIO_WHATSAPP_NUMBER,
-  to: `whatsapp:${recipient}`,
-  body: `💬 Deal Room 
+    const chatMessage = lines
+      .slice(1)
+      .join("\n")
+      .trim();
+
+    if (!chatMessage) {
+      return res.send(
+        "Please type your message after the room ID."
+      );
+    }
+
+    const room = await getDealRoom(roomId);
+
+    if (!room) {
+      return res.send("Deal Room not found.");
+    }
+
+    await saveMessage(
+      roomId,
+      phone,
+      chatMessage
+    );
+
+    const recipient =
+      phone === room.buyer_phone
+        ? room.seller_phone
+        : room.buyer_phone;
+
+    console.log("Sender:", phone);
+    console.log("Buyer:", room.buyer_phone);
+    console.log("Seller:", room.seller_phone);
+    console.log("Recipient:", recipient);
+
+    await client.messages.create({
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+
+      to: `whatsapp:${recipient}`,
+
+      body: `💬 Deal Room
 
 ${chatMessage}
 
 Reply:
 
 CHAT ${roomId}`
-});
+    });
 
-return res.send("☑ Message sent.");
-} 
-  if (message.toUpperCase().startsWith("AGREE ")) {
-
-  const roomId = message.replace(/^AGREE\s+/i, "").trim();
-
-  const room = await updateAgreement(roomId, phone);
-
-  if (!room) {
-    return res.send("Deal Room not found.");
+    return res.send("☑ Message sent.");
   }
 
-  if (room.buyer_agreed && room.seller_agreed) {
+  // =========================
+  // AGREE
+  // =========================
+  if (message.toUpperCase().startsWith("AGREE ")) {
+    const roomId = message
+      .replace(/^AGREE\s+/i, "")
+      .trim();
 
-    return res.send(`
+    const room =
+      await updateAgreement(roomId, phone);
+
+    if (!room) {
+      return res.send("Deal Room not found.");
+    }
+
+    if (
+      room.buyer_agreed &&
+      room.seller_agreed
+    ) {
+      return res.send(`
 🎉 Both buyer and seller have agreed!
 
 To unlock each other's contact details:
@@ -259,27 +318,35 @@ PAID ${roomId}
 
 after payment.
 `);
-  }
+    }
 
-  return res.send(`
+    return res.send(`
 ✅ Your agreement has been recorded.
 
 Waiting for the other party to agree.
 `);
-            }
-  if (message.toUpperCase().startsWith("PAID ")) {
-
-  const roomId = message.replace(/^PAID\s+/i, "").trim();
-
-  const room = await updatePayment(roomId, phone);
-
-  if (!room) {
-    return res.send("Deal Room not found.");
   }
 
-  if (room.buyer_paid && room.seller_paid) {
+  // =========================
+  // PAID
+  // =========================
+  if (message.toUpperCase().startsWith("PAID ")) {
+    const roomId = message
+      .replace(/^PAID\s+/i, "")
+      .trim();
 
-    return res.send(`
+    const room =
+      await updatePayment(roomId, phone);
+
+    if (!room) {
+      return res.send("Deal Room not found.");
+    }
+
+    if (
+      room.buyer_paid &&
+      room.seller_paid
+    ) {
+      return res.send(`
 🎉 Payment confirmed!
 
 Buyer: ${room.buyer_phone}
@@ -290,42 +357,68 @@ You may now continue your transaction directly.
 
 Thank you for using JR PHEEF Marketplace.
 `);
-  }
+    }
 
-  return res.send(`
+    return res.send(`
 ✅ Payment recorded.
 
 Waiting for the other party to pay.
 `);
   }
-let reply =
-`👋 Welcome to JR PHEEF
+
+  // =========================
+  // DEFAULT REPLY
+  // =========================
+  let reply = `👋 Welcome to JR PHEEF
 
 We help people FIND and CREATE opportunities.
 
 Reply with:
 
 OPPORTUNITY
-FIND`; 
-if (message.toUpperCase().startsWith("FIND")) { {
+FIND`;
 
+  // =========================
+  // FIND
+  // =========================
+  if (message.toUpperCase().startsWith("FIND")) {
     const lines = message.split("\n");
 
     const item = lines[1] || "";
-    const location = lines[2] || "";
-    const budget = parseInt((lines[3] || "").replace(/[^0-9]/g, "")) || null;
 
-    const results = await findListings(item, location, budget);
+    const location = lines[2] || "";
+
+    const budget =
+      parseInt(
+        (lines[3] || "")
+          .replace(/[^0-9]/g, "")
+      ) || null;
+
+    const results =
+      await findListings(
+        item,
+        location,
+        budget
+      );
 
     if (results.length > 0) {
-        const first = results[0];
+      const first = results[0];
 
-  const room = await createDealRoom(first, phone);
-if (room) {
-  await client.messages.create({
-    from: process.env.TWILIO_WHATSAPP_NUMBER,
-    to: `whatsapp:${first.phone}`,
-    body: `🎉 A buyer has been matched with your listing.
+      const room =
+        await createDealRoom(
+          first,
+          phone
+        );
+
+      if (room) {
+        await client.messages.create({
+          from:
+            process.env.TWILIO_WHATSAPP_NUMBER,
+
+          to:
+            `whatsapp:${first.phone}`,
+
+          body: `🎉 A buyer has been matched with your listing.
 
 Your secure Deal Room is ready.
 
@@ -334,10 +427,9 @@ Reply:
 CHAT ${room.id}
 
 to start negotiating safely.`
-  });
-}
-if (room) {
-  reply = `
+        });
+
+        reply = `
 ✅ Match Found!
 
 Item: ${first.item_name}
@@ -354,41 +446,76 @@ to begin negotiating safely.
 
 🔒 JR PHEEF will keep both buyer and seller anonymous until both pay the KSh 30 connection fee.
 `;
-} else {
-  reply = `
+      } else {
+        reply = `
 ❌ We found a seller but could not create a Deal Room.
 
 Please try again.
 `;
-          }
+      }
     } else {
-        reply =
-`😔 No matching items found.
+      reply = `
+😔 No matching items found.
 
-We will notify you when a seller lists one.`;
+We will notify you when a seller lists one.
+`;
     }
-  }  else if (message.toUpperCase().startsWith("OPPORTUNITY")) {
 
-    const saved = await saveListing(message, phone);
+  // =========================
+  // OPPORTUNITY
+  // =========================
+  } else if (
+    message
+      .toUpperCase()
+      .startsWith("OPPORTUNITY")
+  ) {
+    const saved =
+      await saveListing(
+        message,
+        phone
+      );
 
     if (saved) {
-
-      reply =
+      reply = `
 ✅ Your opportunity has been submitted!
 
 JR PHEEF is now matching you with people looking for this opportunity.
 
-Thank you for using JR PHEEF. 
-
+Thank you for using JR PHEEF.
+`;
     } else {
-
-      reply =
-`❌ Sorry.
+      reply = `
+❌ Sorry.
 
 We could not save your listing.
 
-Please try again.`;
+Please try again.
+`;
     }
+  }
+
+  // Send Twilio response
+  res.set(
+    "Content-Type",
+    "text/xml"
+  );
+
+  res.send(`
+<Response>
+<Message>${reply}</Message>
+</Response>
+`);
+});
+
+// Start server
+const PORT =
+  process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(
+    `JR PHEEF running on port ${PORT}`
+  );
+});    }
   }
 
   res.set("Content-Type", "text/xml");
