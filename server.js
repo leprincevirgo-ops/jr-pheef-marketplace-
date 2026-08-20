@@ -53,9 +53,13 @@ async function saveListing(message, phone) {
     return false;
   }
 }
-
 // Find listings
 async function findListings(item, location, budget) {
+  console.log("===== FIND LISTINGS =====");
+  console.log("Item:", item);
+  console.log("Location:", location);
+  console.log("Budget:", budget);
+
   let query = supabase
     .from("listings")
     .select("*")
@@ -82,15 +86,29 @@ async function findListings(item, location, budget) {
   const { data, error } = await query;
 
   if (error) {
-    console.error(error);
+    console.error(
+      "❌ FIND LISTINGS ERROR:",
+      error
+    );
     return [];
   }
+
+  console.log(
+    "✅ MATCHING LISTINGS:",
+    data
+  );
 
   return data;
 }
 
 // Create Deal Room
 async function createDealRoom(listing, buyerPhone) {
+  console.log("===== CREATE DEAL ROOM =====");
+  console.log("Listing:", listing);
+  console.log("Listing ID:", listing.id);
+  console.log("Buyer phone:", buyerPhone);
+  console.log("Seller phone:", listing.phone);
+
   const { data, error } = await supabase
     .from("deal_rooms")
     .insert([
@@ -107,9 +125,17 @@ async function createDealRoom(listing, buyerPhone) {
     .single();
 
   if (error) {
-    console.error(error);
+    console.error(
+      "❌ DEAL ROOM ERROR:",
+      error
+    );
     return null;
   }
+
+  console.log(
+    "✅ DEAL ROOM CREATED:",
+    data
+  );
 
   return data;
 }
