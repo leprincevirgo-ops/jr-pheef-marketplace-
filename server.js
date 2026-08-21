@@ -2,181 +2,379 @@ const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 const twilio = require("twilio");
 
+const app = express();
+
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
+
+// =========================
+// TWILIO
+// =========================
+
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
 
-const app = express();
-
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+// =========================
+// SUPABASE
+// =========================
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SECRET_KEY
 );
 
-// Save a listing to Supabase
+// =========================
+// HELPERS
+// =========================
+
+// Make phone numbers consistent
+function normalizePhone(phone) {
+  if (!phone) return "";
+
+  return phone
+    .replace(/^whatsapp:/i, "")
+    .replace(/\s+/g, "")
+    .replace(/^\+/, "");
+}
+
+// Send Twilio WhatsApp message
+async function sendWhatsApp(to, body) {
+  const normalized = normalizePhone(to);
+
+  console.log("================================");
+  console.log("SENDING WHATSAPP");
+  console.log("To:", normalized);
+  console.log("From:", process.env.TWILIO_WHATSAPP_NUMBER);
+  console.log("Message:", body);
+  console.log("================================");
+
+  try {
+    const result = await client.messages.create({
+      from: process.env.TWILIO_WHATSAPP_NUMBER,
+      to: `whatsapp:+${normalized}`,
+      body
+    });
+
+    console.log("TWILIO MESSAGE SENT:", result.sid);
+
+    return true;
+  } catch (error) {
+    console.error("TWILIO SEND ERROR:");
+    console.error(error);
+    return false;
+  }
+}
+
+// Proper Twilio response
+function twiml(res, message) {
+  const safeMessage = String(message)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+
+  res.type("text/xml");
+
+  res.send(`
+<Response>
+  <Message>${safeMessage}</Message>
+</Response>
+`);
+}
+
+// =========================
+// SAVE LISTING
+// =========================
+
 async function saveListing(message, phone) {
   try {
-    const lines = message.split("\n");
+    console.log("================================");
+    console.log("SAVING LISTING");
+    console.log("Phone:", phone);
+    console.log("Message:", message);
+    console.log("================================");
+
+    const lines = message
+      .split("\n")
+      .map(line => line.trim());
 
     const item = lines[1] || "";
     const priceText = lines[2] || "";
     const town = lines[3] || "";
 
     const price =
-      parseInt(priceText.replace(/[^0-9]/g, "")) || null;
+      parseInt(priceText.replace(/[^0-9]/g, ""), 10) || null;
 
-    const { error } = await supabase
+    if (!item) {
+      console.log("LISTING ERROR: Missing item");
+      return false;
+    }
+
+    const { data, error } = await supabase
       .from("listings")
       .insert([
         {
           seller_name: phone,
-          phone: phone,
+          phone: normalizePhone(phone),
           item_name: item,
           price: price,
           location: town,
           status: "ACTIVE"
         }
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("SUPABASE LISTING ERROR:");
+      console.error(error);
+      return false;
+    }
+
+    console.log("LISTING CREATED:");
+    console.log(data);
+
+    return true;
+
+  } catch (error) {
+    console.error("SAVE LISTING CRASH:");
+    console.error(error);
+    return false;
+  }
+}
+
+// =========================
+// FIND LISTINGS
+// =========================
+
+async function findListings(item, location, budget) {
+  console.log("================================");
+  console.log("FIND LISTINGS");
+  console.log("Item:", item);
+  console.log("Location:", location);
+  console.log("Budget:", budget);
+  console.log("================================");
+
+  try {
+    let query = supabase
+      .from("listings")
+      .select("*")
+      .eq("status", "ACTIVE");
+
+    if (item) {
+      query = query.ilike(
+        "item_name",
+        `%${item}%`
+      );
+    }
+
+    if (location) {
+      query = query.ilike(
+        "location",
+        `%${location}%`
+      );
+    }
+
+    if (budget) {
+      query = query.lte(
+        "price",
+        budget
+      );
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error("FIND LISTINGS SUPABASE ERROR:");
+      console.error(error);
+      return [];
+    }
+
+    console.log("MATCHING LISTINGS:");
+    console.log(data);
+
+    return data || [];
+
+  } catch (error) {
+    console.error("FIND LISTINGS CRASH:");
+    console.error(error);
+    return [];
+  }
+}
+
+// =========================
+// CREATE DEAL ROOM
+// =========================
+
+async function createDealRoom(listing, buyerPhone) {
+  console.log("================================");
+  console.log("CREATING DEAL ROOM");
+  console.log("================================");
+
+  try {
+    if (!listing) {
+      console.error("DEAL ROOM ERROR: Listing is missing");
+      return null;
+    }
+
+    const buyer = normalizePhone(buyerPhone);
+    const seller = normalizePhone(listing.phone);
+
+    console.log("Listing ID:", listing.id);
+    console.log("Buyer:", buyer);
+    console.log("Seller:", seller);
+
+    if (!listing.id) {
+      console.error("DEAL ROOM ERROR: listing.id is missing");
+      return null;
+    }
+
+    if (!buyer) {
+      console.error("DEAL ROOM ERROR: buyer phone missing");
+      return null;
+    }
+
+    if (!seller) {
+      console.error("DEAL ROOM ERROR: seller phone missing");
+      return null;
+    }
+
+    // Prevent the same buyer from creating
+    // duplicate active rooms for the same listing
+    const { data: existing, error: existingError } =
+      await supabase
+        .from("deal_rooms")
+        .select("*")
+        .eq("listing_id", listing.id)
+        .eq("buyer_phone", buyer)
+        .in("status", [
+          "negotiating",
+          "active"
+        ])
+        .limit(1);
+
+    if (existingError) {
+      console.error("CHECK EXISTING ROOM ERROR:");
+      console.error(existingError);
+    }
+
+    if (existing && existing.length > 0) {
+      console.log("EXISTING DEAL ROOM FOUND:");
+      console.log(existing[0]);
+
+      return existing[0];
+    }
+
+    // Create new Deal Room
+    const { data, error } = await supabase
+      .from("deal_rooms")
+      .insert([
+        {
+          listing_id: listing.id,
+          buyer_phone: buyer,
+          seller_phone: seller,
+          status: "negotiating",
+          buyer_paid: false,
+          seller_paid: false,
+          buyer_agreed: false,
+          seller_agreed: false
+        }
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("================================");
+      console.error("DEAL ROOM SUPABASE ERROR");
+      console.error("================================");
+      console.error(error);
+      return null;
+    }
+
+    console.log("================================");
+    console.log("DEAL ROOM CREATED SUCCESSFULLY");
+    console.log("ROOM:");
+    console.log(data);
+    console.log("================================");
+
+    return data;
+
+  } catch (error) {
+    console.error("DEAL ROOM CRASH:");
+    console.error(error);
+    return null;
+  }
+}
+
+// =========================
+// GET DEAL ROOM
+// =========================
+
+async function getDealRoom(roomId) {
+  try {
+    const { data, error } = await supabase
+      .from("deal_rooms")
+      .select("*")
+      .eq("id", roomId)
+      .single();
+
+    if (error) {
+      console.error("GET DEAL ROOM ERROR:");
+      console.error(error);
+      return null;
+    }
+
+    return data;
+
+  } catch (error) {
+    console.error("GET DEAL ROOM CRASH:");
+    console.error(error);
+    return null;
+  }
+}
+
+// =========================
+// SAVE MESSAGE
+// =========================
+
+async function saveMessage(
+  roomId,
+  senderPhone,
+  message
+) {
+  try {
+    const { error } = await supabase
+      .from("messages")
+      .insert([
+        {
+          room_id: roomId,
+          sender_phone: normalizePhone(senderPhone),
+          message: message
+        }
       ]);
 
     if (error) {
+      console.error("SAVE MESSAGE ERROR:");
       console.error(error);
       return false;
     }
 
     return true;
-  } catch (err) {
-    console.error(err);
-    return false;
-  }
-}
-// Find listings
-async function findListings(item, location, budget) {
-  console.log("===== FIND LISTINGS =====");
-  console.log("Item:", item);
-  console.log("Location:", location);
-  console.log("Budget:", budget);
 
-  let query = supabase
-    .from("listings")
-    .select("*")
-    .eq("status", "ACTIVE");
-
-  if (item) {
-    query = query.ilike(
-      "item_name",
-      `%${item}%`
-    );
-  }
-
-  if (location) {
-    query = query.ilike(
-      "location",
-      `%${location}%`
-    );
-  }
-
-  if (budget) {
-    query = query.lte("price", budget);
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    console.error(
-      "❌ FIND LISTINGS ERROR:",
-      error
-    );
-    return [];
-  }
-
-  console.log(
-    "✅ MATCHING LISTINGS:",
-    data
-  );
-
-  return data;
-}
-
-// Create Deal Room
-async function createDealRoom(listing, buyerPhone) {
-  console.log("===== CREATE DEAL ROOM =====");
-  console.log("Listing:", listing);
-  console.log("Listing ID:", listing.id);
-  console.log("Buyer phone:", buyerPhone);
-  console.log("Seller phone:", listing.phone);
-
-  const { data, error } = await supabase
-    .from("deal_rooms")
-    .insert([
-      {
-        listing_id: listing.id,
-        buyer_phone: buyerPhone,
-        seller_phone: listing.phone,
-        status: "negotiating",
-        buyer_paid: false,
-        seller_paid: false
-      }
-    ])
-    .select()
-    .single();
-
-  if (error) {
-    console.error(
-      "❌ DEAL ROOM ERROR:",
-      error
-    );
-    return null;
-  }
-
-  console.log(
-    "✅ DEAL ROOM CREATED:",
-    data
-  );
-
-  return data;
-}
-
-// Get Deal Room
-async function getDealRoom(roomId) {
-  const { data, error } = await supabase
-    .from("deal_rooms")
-    .select("*")
-    .eq("id", roomId)
-    .single();
-
-  if (error) {
-    console.error(error);
-    return null;
-  }
-
-  return data;
-}
-
-// Save message
-async function saveMessage(roomId, senderPhone, message) {
-  const { error } = await supabase
-    .from("messages")
-    .insert([
-      {
-        room_id: roomId,
-        sender_phone: senderPhone,
-        message: message
-      }
-    ]);
-
-  if (error) {
+  } catch (error) {
+    console.error("SAVE MESSAGE CRASH:");
     console.error(error);
     return false;
   }
-
-  return true;
 }
 
-// Update agreement
+// =========================
+// UPDATE AGREEMENT
+// =========================
+
 async function updateAgreement(roomId, phone) {
   const room = await getDealRoom(roomId);
 
@@ -184,12 +382,28 @@ async function updateAgreement(roomId, phone) {
     return null;
   }
 
+  const normalizedPhone = normalizePhone(phone);
+
   const updates = {};
 
-  if (phone === room.buyer_phone) {
+  if (
+    normalizedPhone ===
+    normalizePhone(room.buyer_phone)
+  ) {
     updates.buyer_agreed = true;
-  } else if (phone === room.seller_phone) {
+
+  } else if (
+    normalizedPhone ===
+    normalizePhone(room.seller_phone)
+  ) {
     updates.seller_agreed = true;
+
+  } else {
+    console.log(
+      "AGREE ERROR: Phone does not belong to room"
+    );
+
+    return null;
   }
 
   const { data, error } = await supabase
@@ -200,6 +414,7 @@ async function updateAgreement(roomId, phone) {
     .single();
 
   if (error) {
+    console.error("UPDATE AGREEMENT ERROR:");
     console.error(error);
     return null;
   }
@@ -207,7 +422,10 @@ async function updateAgreement(roomId, phone) {
   return data;
 }
 
-// Update payment
+// =========================
+// UPDATE PAYMENT
+// =========================
+
 async function updatePayment(roomId, phone) {
   const room = await getDealRoom(roomId);
 
@@ -215,12 +433,28 @@ async function updatePayment(roomId, phone) {
     return null;
   }
 
+  const normalizedPhone = normalizePhone(phone);
+
   const updates = {};
 
-  if (phone === room.buyer_phone) {
+  if (
+    normalizedPhone ===
+    normalizePhone(room.buyer_phone)
+  ) {
     updates.buyer_paid = true;
-  } else if (phone === room.seller_phone) {
+
+  } else if (
+    normalizedPhone ===
+    normalizePhone(room.seller_phone)
+  ) {
     updates.seller_paid = true;
+
+  } else {
+    console.log(
+      "PAYMENT ERROR: Phone does not belong to room"
+    );
+
+    return null;
   }
 
   const { data, error } = await supabase
@@ -231,6 +465,7 @@ async function updatePayment(roomId, phone) {
     .single();
 
   if (error) {
+    console.error("UPDATE PAYMENT ERROR:");
     console.error(error);
     return null;
   }
@@ -238,197 +473,340 @@ async function updatePayment(roomId, phone) {
   return data;
 }
 
-// Home
+// =========================
+// HOME
+// =========================
+
 app.get("/", (req, res) => {
-  res.send("🚀 JR PHEEF Marketplace is LIVE");
+  res.send(
+    "🚀 JR PHEEF Marketplace is LIVE"
+  );
 });
 
-// WhatsApp webhook
-app.post("/api/webhook/whatsapp", async (req, res) => {
-  console.log("Webhook received");
+// =========================
+// WHATSAPP WEBHOOK
+// =========================
 
-  const message = (req.body.Body || "").trim();
+app.post(
+  "/api/webhook/whatsapp",
+  async (req, res) => {
 
-  const phone = (req.body.From || "")
-    .replace("whatsapp:", "");
+    console.log("");
+    console.log("================================");
+    console.log("WHATSAPP WEBHOOK RECEIVED");
+    console.log("================================");
 
-  // =========================
-  // CHAT
-  // =========================
-  if (message.toUpperCase().startsWith("CHAT ")) {
-    const lines = message.split("\n");
+    const message =
+      (req.body.Body || "").trim();
 
-    const roomId = lines[0]
-      .replace(/^CHAT\s+/i, "")
-      .trim();
+    const phone =
+      normalizePhone(req.body.From || "");
 
-    const chatMessage = lines
-      .slice(1)
-      .join("\n")
-      .trim();
+    console.log("PHONE:", phone);
+    console.log("MESSAGE:", message);
 
-    if (!chatMessage) {
-      return res.send(
-        "Please type your message after the room ID."
+    // =========================
+    // CHAT
+    // =========================
+
+    if (
+      message
+        .toUpperCase()
+        .startsWith("CHAT ")
+    ) {
+
+      const lines = message.split("\n");
+
+      const roomId = lines[0]
+        .replace(/^CHAT\s+/i, "")
+        .trim();
+
+      const chatMessage = lines
+        .slice(1)
+        .join("\n")
+        .trim();
+
+      if (!chatMessage) {
+        return twiml(
+          res,
+          "Please type your message after the room ID."
+        );
+      }
+
+      const room =
+        await getDealRoom(roomId);
+
+      if (!room) {
+        return twiml(
+          res,
+          "❌ Deal Room not found."
+        );
+      }
+
+      const isBuyer =
+        normalizePhone(room.buyer_phone) ===
+        normalizePhone(phone);
+
+      const isSeller =
+        normalizePhone(room.seller_phone) ===
+        normalizePhone(phone);
+
+      if (!isBuyer && !isSeller) {
+        return twiml(
+          res,
+          "❌ You are not a participant in this Deal Room."
+        );
+      }
+
+      await saveMessage(
+        roomId,
+        phone,
+        chatMessage
       );
-    }
 
-    const room = await getDealRoom(roomId);
+      const recipient =
+        isBuyer
+          ? room.seller_phone
+          : room.buyer_phone;
 
-    if (!room) {
-      return res.send("Deal Room not found.");
-    }
-
-    await saveMessage(
-      roomId,
-      phone,
-      chatMessage
-    );
-
-    const recipient =
-      phone === room.buyer_phone
-        ? room.seller_phone
-        : room.buyer_phone;
-
-    console.log("Sender:", phone);
-    console.log("Buyer:", room.buyer_phone);
-    console.log("Seller:", room.seller_phone);
-    console.log("Recipient:", recipient);
-
-    await client.messages.create({
-      from: process.env.TWILIO_WHATSAPP_NUMBER,
-
-      to: `whatsapp:${recipient}`,
-
-      body: `💬 Deal Room
+      await sendWhatsApp(
+        recipient,
+        `💬 JR PHEEF DEAL ROOM
 
 ${chatMessage}
 
 Reply:
 
-CHAT ${roomId}`
-    });
+CHAT ${roomId}
+`
+      );
 
-    return res.send("☑ Message sent.");
-  }
-
-  // =========================
-  // AGREE
-  // =========================
-  if (message.toUpperCase().startsWith("AGREE ")) {
-    const roomId = message
-      .replace(/^AGREE\s+/i, "")
-      .trim();
-
-    const room =
-      await updateAgreement(roomId, phone);
-
-    if (!room) {
-      return res.send("Deal Room not found.");
+      return twiml(
+        res,
+        "☑ Message sent through the Deal Room."
+      );
     }
 
+    // =========================
+    // AGREE
+    // =========================
+
     if (
-      room.buyer_agreed &&
-      room.seller_agreed
+      message
+        .toUpperCase()
+        .startsWith("AGREE ")
     ) {
-      return res.send(`
-🎉 Both buyer and seller have agreed!
 
-To unlock each other's contact details:
+      const roomId =
+        message
+          .replace(/^AGREE\s+/i, "")
+          .trim();
 
-💰 Pay KSh 30 via M-Pesa.
+      const room =
+        await updateAgreement(
+          roomId,
+          phone
+        );
 
-Reply with:
+      if (!room) {
+        return twiml(
+          res,
+          "❌ Deal Room not found or you are not a participant."
+        );
+      }
+
+      if (
+        room.buyer_agreed &&
+        room.seller_agreed
+      ) {
+
+        const notice = `
+🎉 BOTH PARTIES AGREED!
+
+The buyer and seller have agreed on the deal.
+
+To unlock the connection:
+
+💰 KSh 30 from buyer
+💰 KSh 30 from seller
+
+Reply:
 
 PAID ${roomId}
 
-after payment.
-`);
-    }
+after making your payment.
+`;
 
-    return res.send(`
+        await sendWhatsApp(
+          room.buyer_phone,
+          notice
+        );
+
+        await sendWhatsApp(
+          room.seller_phone,
+          notice
+        );
+
+        return twiml(
+          res,
+          notice
+        );
+      }
+
+      return twiml(
+        res,
+        `
 ✅ Your agreement has been recorded.
 
 Waiting for the other party to agree.
-`);
-  }
 
-  // =========================
-  // PAID
-  // =========================
-  if (message.toUpperCase().startsWith("PAID ")) {
-    const roomId = message
-      .replace(/^PAID\s+/i, "")
-      .trim();
-
-    const room =
-      await updatePayment(roomId, phone);
-
-    if (!room) {
-      return res.send("Deal Room not found.");
+Deal Room:
+${roomId}
+`
+      );
     }
+
+    // =========================
+    // PAID
+    // =========================
 
     if (
-      room.buyer_paid &&
-      room.seller_paid
+      message
+        .toUpperCase()
+        .startsWith("PAID ")
     ) {
-      return res.send(`
-🎉 Payment confirmed!
 
-Buyer: ${room.buyer_phone}
+      const roomId =
+        message
+          .replace(/^PAID\s+/i, "")
+          .trim();
 
-Seller: ${room.seller_phone}
+      const room =
+        await updatePayment(
+          roomId,
+          phone
+        );
 
-You may now continue your transaction directly.
+      if (!room) {
+        return twiml(
+          res,
+          "❌ Deal Room not found or you are not a participant."
+        );
+      }
+
+      if (
+        room.buyer_paid &&
+        room.seller_paid
+      ) {
+
+        const successMessage = `
+🎉 CONNECTION UNLOCKED!
+
+Both parties have paid the KSh 30 connection fee.
+
+Buyer:
++${room.buyer_phone}
+
+Seller:
++${room.seller_phone}
+
+You may now continue the transaction directly.
 
 Thank you for using JR PHEEF Marketplace.
-`);
-    }
+`;
 
-    return res.send(`
-✅ Payment recorded.
+        await sendWhatsApp(
+          room.buyer_phone,
+          successMessage
+        );
+
+        await sendWhatsApp(
+          room.seller_phone,
+          successMessage
+        );
+
+        return twiml(
+          res,
+          successMessage
+        );
+      }
+
+      return twiml(
+        res,
+        `
+✅ Your payment has been recorded.
 
 Waiting for the other party to pay.
-`);
-  }
 
-  // =========================
-  // DEFAULT REPLY
-  // =========================
-  let reply = `👋 Welcome to JR PHEEF
-
-We help people FIND and CREATE opportunities.
-
-Reply with:
-
-OPPORTUNITY
-FIND`;
-
-  // =========================
-  // FIND
-  // =========================
-  if (message.toUpperCase().startsWith("FIND")) {
-    const lines = message.split("\n");
-
-    const item = lines[1] || "";
-
-    const location = lines[2] || "";
-
-    const budget =
-      parseInt(
-        (lines[3] || "")
-          .replace(/[^0-9]/g, "")
-      ) || null;
-
-    const results =
-      await findListings(
-        item,
-        location,
-        budget
+Deal Room:
+${roomId}
+`
       );
+    }
 
-    if (results.length > 0) {
+    // =========================
+    // FIND
+    // =========================
+
+    if (
+      message
+        .toUpperCase()
+        .startsWith("FIND")
+    ) {
+
+      const lines =
+        message.split("\n");
+
+      const item =
+        (lines[1] || "").trim();
+
+      const location =
+        (lines[2] || "").trim();
+
+      const budget =
+        parseInt(
+          (lines[3] || "")
+            .replace(/[^0-9]/g, ""),
+          10
+        ) || null;
+
+      console.log("================================");
+      console.log("BUYER SEARCH");
+      console.log("Buyer:", phone);
+      console.log("Item:", item);
+      console.log("Location:", location);
+      console.log("Budget:", budget);
+      console.log("================================");
+
+      const results =
+        await findListings(
+          item,
+          location,
+          budget
+        );
+
+      if (!results.length) {
+
+        return twiml(
+          res,
+          `
+😔 No matching items found.
+
+JR PHEEF will keep looking for a match.
+
+Thank you for using JR PHEEF Marketplace.
+`
+        );
+      }
+
       const first = results[0];
+
+      console.log("SELECTED LISTING:");
+      console.log(first);
+
+      // =========================
+      // CREATE DEAL ROOM
+      // =========================
 
       const room =
         await createDealRoom(
@@ -436,109 +814,209 @@ FIND`;
           phone
         );
 
-      if (room) {
-        await client.messages.create({
-          from:
-            process.env.TWILIO_WHATSAPP_NUMBER,
+      if (!room) {
 
-          to:
-            `whatsapp:${first.phone}`,
+        console.error(
+          "❌ DEAL ROOM CREATION FAILED"
+        );
 
-          body: `🎉 A buyer has been matched with your listing.
+        return twiml(
+          res,
+          `
+❌ We found a matching seller, but the secure Deal Room could not be created.
 
-Your secure Deal Room is ready.
+The JR PHEEF team needs to check the database.
 
-Reply:
+Please try again.
+`
+        );
+      }
 
-CHAT ${room.id}
+      console.log(
+        "✅ DEAL ROOM ID:",
+        room.id
+      );
 
-to start negotiating safely.`
-        });
+      // =========================
+      // NOTIFY SELLER
+      // =========================
 
-        reply = `
-✅ Match Found!
+      const sellerMessage = `
+🎉 JR PHEEF MATCH FOUND!
+
+A buyer is interested in:
 
 Item: ${first.item_name}
 Price: KSh ${first.price}
 Location: ${first.location}
 
-A secure Deal Room has been created.
+🔐 Secure Deal Room created.
 
-Reply:
+Deal Room ID:
+
+${room.id}
+
+To communicate with the buyer, reply:
 
 CHAT ${room.id}
 
-to begin negotiating safely.
+Your phone number remains protected.
 
-🔒 JR PHEEF will keep both buyer and seller anonymous until both pay the KSh 30 connection fee.
+To agree to the deal, reply:
+
+AGREE ${room.id}
+
+JR PHEEF Marketplace
 `;
-      } else {
-        reply = `
-❌ We found a seller but could not create a Deal Room.
 
-Please try again.
-`;
-      }
-    } else {
-      reply = `
-😔 No matching items found.
+      const sellerSent =
+        await sendWhatsApp(
+          first.phone,
+          sellerMessage
+        );
 
-We will notify you when a seller lists one.
-`;
-    }
-
-  // =========================
-  // OPPORTUNITY
-  // =========================
-  } else if (
-    message
-      .toUpperCase()
-      .startsWith("OPPORTUNITY")
-  ) {
-    const saved =
-      await saveListing(
-        message,
-        phone
+      console.log(
+        "SELLER NOTIFICATION SENT:",
+        sellerSent
       );
 
-    if (saved) {
-      reply = `
-✅ Your opportunity has been submitted!
+      // =========================
+      // BUYER RESPONSE
+      // =========================
 
-JR PHEEF is now matching you with people looking for this opportunity.
+      return twiml(
+        res,
+        `
+✅ MATCH FOUND!
 
-Thank you for using JR PHEEF.
-`;
-    } else {
-      reply = `
+Item:
+${first.item_name}
+
+Price:
+KSh ${first.price}
+
+Location:
+${first.location}
+
+🔐 SECURE DEAL ROOM CREATED
+
+Deal Room ID:
+
+${room.id}
+
+The seller has been notified.
+
+Start negotiating with:
+
+CHAT ${room.id}
+
+Agree to the deal with:
+
+AGREE ${room.id}
+
+💰 Connection fee:
+KSh 30 buyer
+KSh 30 seller
+
+JR PHEEF keeps the connection secure.
+`
+      );
+    }
+
+    // =========================
+    // OPPORTUNITY
+    // =========================
+
+    if (
+      message
+        .toUpperCase()
+        .startsWith("OPPORTUNITY")
+    ) {
+
+      const saved =
+        await saveListing(
+          message,
+          phone
+        );
+
+      if (!saved) {
+
+        return twiml(
+          res,
+          `
 ❌ Sorry.
 
-We could not save your listing.
+We could not save your opportunity.
 
 Please try again.
-`;
+`
+        );
+      }
+
+      return twiml(
+        res,
+        `
+✅ YOUR OPPORTUNITY HAS BEEN SUBMITTED!
+
+JR PHEEF is now matching you with people looking for:
+
+${message.split("\n")[1] || "your item"}
+
+You will be notified when a buyer is found.
+
+Thank you for using JR PHEEF Marketplace.
+`
+      );
     }
+
+    // =========================
+    // DEFAULT
+    // =========================
+
+    return twiml(
+      res,
+      `
+👋 Welcome to JR PHEEF Marketplace!
+
+We help buyers and sellers FIND and MATCH opportunities.
+
+SELL something:
+
+OPPORTUNITY
+Item
+Price
+Location
+
+FIND something:
+
+FIND
+Item
+Location
+Budget
+
+Example:
+
+FIND
+Toyota Axio
+Nairobi
+900000
+`
+    );
   }
+);
 
-  // Send Twilio response
-  res.set(
-    "Content-Type",
-    "text/xml"
-  );
+// =========================
+// START SERVER
+// =========================
 
-  res.send(`
-<Response>
-<Message>${reply}</Message>
-</Response>
-`);
-});
-
-// Start server
 const PORT =
   process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(
-    `JR PHEEF running on port ${PORT}`
-  );
-});
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      `🚀 JR PHEEF running on port ${PORT}`
+    );
+  }
+);
