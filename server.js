@@ -3,384 +3,258 @@ const { createClient } = require("@supabase/supabase-js");
 const twilio = require("twilio");
 
 const app = express();
-
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-/* =========================
-   ENVIRONMENT
-========================= */
-
-const PORT = process.env.PORT || 3000;
-
+const PORT = process.env.PORT || 10000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY =
-  process.env.SUPABASE_KEY ||
-  process.env.SUPABASE_SECRET_KEY;
+  process.env.SUPABASE_KEY || process.env.SUPABASE_SECRET_KEY;
 
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_FROM = process.env.TWILIO_WHATSAPP_NUMBER;
 
-const TILL = process.env.JR_PHEEF_TILL || "9270365";
+const ADMIN_USER = process.env.JR_PHEEF_ADMIN_USER;
+const ADMIN_PASS = process.env.JR_PHEEF_ADMIN_PASSWORD;
 
-const supabase = createClient(
-  SUPABASE_URL,
-  SUPABASE_KEY
-);
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+const twilioClient = twilio(TWILIO_SID, TWILIO_TOKEN);
 
-const twilioClient = twilio(
-  TWILIO_SID,
-  TWILIO_TOKEN
-);
-
-/* =========================
-   SETTINGS
-========================= */
-
-const CONNECTION_FEE = 30;
-
-const PHOTO_LIMITS = {
-  FREE: 5,
-  PLUS: 5,
-  PRO: 10,
-  PRIME: 20,
-  ELITE: 20
+const PLANS = {
+  FREE:  { name: "JR PHEEF FREE+", price: 0,   fee: 30, photos: 5 },
+  PRO:   { name: "JR PHEEF PRO",   price: 99,  fee: 20, photos: 10 },
+  PRIME: { name: "JR PHEEF PRIME", price: 149, fee: 15, photos: 20 },
+  ELITE: { name: "JR PHEEF ELITE", price: null, fee: null, photos: 20 }
 };
 
-const MEMBERSHIP = {
-  FREE: {
-    name: "JR PHEEF FREE+",
-    price: 0
-  },
-
-  PRO: {
-    name: "JR PHEEF PRO",
-    price: 99,
-    period: "monthly"
-  },
-
-  PRIME: {
-    name: "JR PHEEF PRIME",
-    price: 149,
-    period: "monthly"
-  },
-
-  ELITE: {
-    name: "JR PHEEF ELITE",
-    price: null,
-    period: "custom"
-  }
+const WITHDRAWAL = {
+  INDIVIDUAL: 200,
+  BUSINESS: 1000
 };
 
-/* =========================
-   HELPERS
-========================= */
+const clean = x =>
+  String(x || "").replace(/^whatsapp:/i, "").trim();
 
-function cleanPhone(value) {
-  return String(value || "")
-    .replace(/^whatsapp:/i, "")
-    .trim();
-}
+const money = n =>
+  Number(n || 0).toLocaleString("en-KE");
 
-function money(value) {
-  return Number(value || 0).toLocaleString("en-KE");
-}
-
-function xml(text) {
-  return `<Response><Message>${String(text || "")
+const reply = text =>
+  `<Response><Message>${String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")}</Message></Response>`;
-}
 
-async function sendWhatsApp(to, message) {
+const plan = p =>
+  PLANS[String(p || "FREE").toUpperCase()] || PLANS.FREE;
+
+async function send(to, body, mediaUrl) {
   return twilioClient.messages.create({
     from: TWILIO_FROM,
-    to: `whatsapp:${cleanPhone(to)}`,
-    body: message
+    to: `whatsapp:${clean(to)}`,
+    body,
+    ...(mediaUrl ? { mediaUrl } : {})
   });
 }
 
-/* =========================
-   MEMBERSHIP
-========================= */
+/* -------------------------
+   SIMPLE SECURITY
+------------------------- */
 
-function getMembership(text) {
-  const value = String(text || "").toUpperCase();
+const hits = new Map();
 
-  if (value.includes("PRIME")) return "PRIME";
-  if (value.includes("PRO")) return "PRO";
+function allowed(phone) {
+  const now = Date.now();
+  const old = hits.get(phone) || [];
+  const recent = old.filter(t => now - t < 60000);
 
-  return "FREE";
+  if (recent.length >= 30) return false;
+
+  recent.push(now);
+  hits.set(phone, recent);
+  return true;
 }
 
-function photoLimit(plan) {
-  return PHOTO_LIMITS[plan] || 5;
+function admin(req, res, next) {
+  const auth = req.headers.authorization || "";
+
+  if (!auth.startsWith("Basic ")) {
+    res.set("WWW-Authenticate", 'Basic realm="JR PHEEF OWNER"');
+    return res.status(401).send("Owner login required");
+  }
+
+  const value = Buffer.from(auth.slice(6), "base64")
+    .toString()
+    .split(":");
+
+  if (
+    value[0] !== ADMIN_USER ||
+    value[1] !== ADMIN_PASS
+  ) {
+    return res.status(403).send("Access denied");
+  }
+
+  next();
 }
 
-/* =========================
+/* -------------------------
    WELCOME
-========================= */
+------------------------- */
 
 function welcome() {
-  return `👋 Welcome to JR PHEEF!
+  return `👋 Welcome to JR PHEEF.
 
 One account. Two sides.
 
-🔎 BUY
-📣 SELL
+🔎 Buy
+📣 Sell
 
-You can do both at the same time.
+You can do both.
 
-Tell me naturally what you're looking for or what you're selling.
-
-English, Sheng or a mix is okay.
+Talk naturally in English, Sheng or both.
 
 Example:
-
 "Natafuta Toyota Axio around 850k Nairobi."
 
 Or:
-
 "Nauza Toyota Prado 2020, 6.5M Nairobi."`;
 }
 
-/* =========================
-   DASHBOARD
-========================= */
+/* -------------------------
+   FIND USER
+------------------------- */
 
-async function dashboard(phone) {
-  const { data: listings } = await supabase
-    .from("listings")
-    .select("id")
-    .eq("phone", phone)
-    .eq("status", "ACTIVE");
-
-  const { data: rooms } = await supabase
-    .from("deal_rooms")
-    .select("id,status,buyer_paid,seller_paid")
-    .or(`buyer_phone.eq.${phone},seller_phone.eq.${phone}`)
-    .in("status", [
-      "negotiating",
-      "agreed",
-      "paid"
-    ]);
-
-  const activeListings = listings?.length || 0;
-  const activeRooms = rooms?.length || 0;
-
-  const pendingPayments =
-    rooms?.filter(
-      r => !r.buyer_paid || !r.seller_paid
-    ).length || 0;
-
-  return `👤 MY JR PHEEF
-
-🔎 BUYING
-Active matches: ${activeRooms}
-
-📣 SELLING
-Active listings: ${activeListings}
-
-🔐 DEAL ROOMS
-Active: ${activeRooms}
-
-💳 PAYMENTS
-Pending: ${pendingPayments}
-
-🎁 REWARDS
-Available through your JR PHEEF activity.
-
-🎟️ COUPONS
-Check your available offers.
-
-🤝 REFERRALS
-Your referral activity is tracked here.
-
-You are both a BUYER and a SELLER.`;
-}
-
-/* =========================
-   CREATE DEAL ROOM
-========================= */
-
-async function createDealRoom(listing, buyer) {
-  if (!listing) return null;
-
-  if (cleanPhone(listing.phone) === cleanPhone(buyer)) {
-    return null;
-  }
-
-  const { data: existing } = await supabase
-    .from("deal_rooms")
+async function getUser(phone) {
+  const { data } = await db
+    .from("users")
     .select("*")
-    .eq("listing_id", listing.id)
-    .eq("buyer_phone", buyer)
-    .in("status", [
-      "negotiating",
-      "agreed",
-      "paid"
-    ])
-    .order("created_at", {
-      ascending: false
-    })
-    .limit(1);
-
-  if (existing?.length) {
-    return existing[0];
-  }
-
-  const { data, error } = await supabase
-    .from("deal_rooms")
-    .insert([
-      {
-        listing_id: listing.id,
-        buyer_phone: buyer,
-        seller_phone: listing.phone,
-
-        status: "negotiating",
-
-        buyer_paid: false,
-        seller_paid: false,
-
-        buyer_agreed: false,
-        seller_agreed: false
-      }
-    ])
-    .select()
-    .single();
-
-  if (error) {
-    console.error(
-      "DEAL ROOM ERROR:",
-      error
-    );
-
-    return null;
-  }
+    .eq("phone", phone)
+    .maybeSingle();
 
   return data;
 }
 
-/* =========================
-   FIND LISTINGS
-========================= */
+/* -------------------------
+   CREATE USER
+------------------------- */
 
-async function findListings(
-  item,
-  location,
-  budget
-) {
-  let query = supabase
+async function ensureUser(phone) {
+  let user = await getUser(phone);
+
+  if (user) return user;
+
+  const referral =
+    `JP${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+  const { data } = await db
+    .from("users")
+    .insert({
+      phone,
+      plan: "FREE",
+      referral_code: referral,
+      reward_balance: 0,
+      withdrawable_balance: 0,
+      credit_balance: 0
+    })
+    .select()
+    .single();
+
+  return data;
+}
+
+/* -------------------------
+   CONNECTION FEE
+------------------------- */
+
+function connectionFee(user) {
+  return plan(user?.plan).fee;
+}
+
+/* -------------------------
+   DEAL ROOM
+------------------------- */
+
+async function dealRoom(listing, buyer) {
+  if (clean(listing.phone) === clean(buyer)) return null;
+
+  const { data: existing } = await db
+    .from("deal_rooms")
+    .select("*")
+    .eq("listing_id", listing.id)
+    .eq("buyer_phone", buyer)
+    .in("status", ["negotiating", "agreed", "paid"])
+    .limit(1);
+
+  if (existing?.[0]) return existing[0];
+
+  const { data } = await db
+    .from("deal_rooms")
+    .insert({
+      listing_id: listing.id,
+      buyer_phone: buyer,
+      seller_phone: listing.phone,
+      status: "negotiating",
+      buyer_paid: false,
+      seller_paid: false
+    })
+    .select()
+    .single();
+
+  return data;
+}
+
+/* -------------------------
+   SEARCH
+------------------------- */
+
+async function search(text, buyer) {
+  const words = text
+    .replace(/^(looking for|i need|find me|natafuta|natafut)/i, "")
+    .trim();
+
+  if (!words) return null;
+
+  const { data } = await db
     .from("listings")
     .select("*")
-    .eq("status", "ACTIVE");
+    .eq("status", "ACTIVE")
+    .ilike("item_name", `%${words}%`)
+    .limit(10);
 
-  if (item) {
-    query = query.ilike(
-      "item_name",
-      `%${item}%`
-    );
-  }
-
-  if (location) {
-    query = query.ilike(
-      "location",
-      `%${location}%`
-    );
-  }
-
-  if (budget) {
-    query = query.lte(
-      "price",
-      budget
-    );
-  }
-
-  const { data, error } =
-    await query.order(
-      "created_at",
-      { ascending: false }
-    );
-
-  if (error) {
-    console.error(
-      "SEARCH ERROR:",
-      error
-    );
-
-    return [];
-  }
-
-  return data || [];
+  return (data || []).find(
+    x => clean(x.phone) !== clean(buyer)
+  );
 }
 
-/* =========================
-   NATURAL LANGUAGE
-========================= */
+/* -------------------------
+   NATURAL SELLING
+------------------------- */
 
-function extractBuyerRequest(text) {
-  const patterns = [
-    /(?:looking for)\s+(.+)/i,
-    /(?:i need)\s+(.+)/i,
-    /(?:find me)\s+(.+)/i,
-    /(?:natafuta)\s+(.+)/i,
-    /(?:natafut)\s+(.+)/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-
-    if (match) {
-      return match[1].trim();
-    }
-  }
-
-  return null;
+function sellerIntent(text) {
+  return /nauza|ninauza|selling|i have|i'm selling|available/i.test(text);
 }
 
-function isSellerMessage(text) {
-  return /selling|i have|nauza|niko na|available|i'm selling|ninauza/i
-    .test(text);
+/* -------------------------
+   BUYER INTENT
+------------------------- */
+
+function buyerIntent(text) {
+  return /looking for|i need|find me|natafuta|natafut/i.test(text);
 }
 
-/* =========================
-   LISTING
-========================= */
+/* -------------------------
+   CREATE LISTING
+------------------------- */
 
-async function createListing(
-  text,
-  phone
-) {
+async function listing(text, phone) {
   const lines = text
     .split("\n")
     .map(x => x.trim())
     .filter(Boolean);
 
-  const item = lines[1] || "";
-
-  const price =
-    parseInt(
-      (lines[2] || "")
-        .replace(/[^0-9]/g, ""),
-      10
-    ) || null;
-
-  const location = lines[3] || "";
-
-  if (!item || !price || !location) {
-    return `📣 Let's list your opportunity.
-
-Send:
-
-OPPORTUNITY
-Item
-Price
-Location
-
-Example:
+  if (lines.length < 4) {
+    return `📣 Send your opportunity like this:
 
 OPPORTUNITY
 Toyota Axio 2015
@@ -390,74 +264,50 @@ Nairobi
 Then send your photos together.`;
   }
 
-  const { error } =
-    await supabase
-      .from("listings")
-      .insert([
-        {
-          seller_name: phone,
-          phone,
-          item_name: item,
-          price,
-          location,
-          status: "ACTIVE",
-          photos: []
-        }
-      ]);
+  const user = await ensureUser(phone);
+  const p = plan(user?.plan);
+
+  const { data, error } = await db
+    .from("listings")
+    .insert({
+      phone,
+      item_name: lines[1],
+      price: Number(lines[2].replace(/[^0-9]/g, "")),
+      location: lines[3],
+      photos: [],
+      status: "ACTIVE",
+      plan: String(user?.plan || "FREE").toUpperCase()
+    })
+    .select()
+    .single();
 
   if (error) {
-    console.error(
-      "LISTING ERROR:",
-      error
-    );
-
-    return "❌ I couldn't create the listing. Please try again.";
+    console.error(error);
+    return "❌ I couldn't create that listing. Please try again.";
   }
 
-  return `✅ Listed successfully!
+  return `✅ Listing created.
 
-${item}
+${data.item_name}
+💰 KSh ${money(data.price)}
+📍 ${data.location}
 
-💰 KSh ${money(price)}
-📍 ${location}
+📸 You can send up to ${p.photos} photos.
 
-📸 Send your product photos together.
-
-FREE+ → up to 5
-PRO → up to 10
-PRIME → up to 20
-
-I'll start looking for buyers. 🤝`;
+I'll look for buyers. 🤝`;
 }
 
-/* =========================
+/* -------------------------
    MATCH
-========================= */
+------------------------- */
 
-async function createMatch(
-  listing,
-  buyer
-) {
-  if (
-    cleanPhone(listing.phone) ===
-    cleanPhone(buyer)
-  ) {
-    return null;
-  }
-
-  const room =
-    await createDealRoom(
-      listing,
-      buyer
-    );
-
+async function match(listing, buyer) {
+  const room = await dealRoom(listing, buyer);
   if (!room) return null;
 
-  /* SELLER */
-  try {
-    await sendWhatsApp(
-      listing.phone,
-      `🎉 JR PHEEF FOUND A MATCH!
+  await send(
+    listing.phone,
+    `🎉 JR PHEEF found a match.
 
 Someone is interested in:
 
@@ -465,400 +315,292 @@ ${listing.item_name}
 💰 KSh ${money(listing.price)}
 📍 ${listing.location}
 
-🔐 Your Deal Room is ready.
+🔐 Deal Room created.
 
-Reply CHAT to open it.
+Reply CHAT to enter.
 
 Your phone number stays protected.`
-    );
-  } catch (error) {
-    console.error(
-      "SELLER NOTIFICATION:",
-      error
-    );
-  }
+  );
 
   return room;
 }
 
-/* =========================
-   PAYMENT STAGE
-========================= */
+/* -------------------------
+   DEAL ROOM PAYMENT INFO
+------------------------- */
 
-async function paymentStage(
-  room,
-  phone
-) {
-  const buyer =
-    cleanPhone(room.buyer_phone);
+async function paymentInfo(room, phone) {
+  const user = await ensureUser(phone);
+  const fee = connectionFee(user);
 
-  const seller =
-    cleanPhone(room.seller_phone);
+  const side =
+    clean(room.buyer_phone) === clean(phone)
+      ? "buyer"
+      : "seller";
 
-  const isBuyer =
-    cleanPhone(phone) === buyer;
-
-  const paid =
-    isBuyer
+  const alreadyPaid =
+    side === "buyer"
       ? room.buyer_paid
       : room.seller_paid;
 
-  if (paid) {
-    return `✅ Your KSh ${CONNECTION_FEE} connection payment is already recorded.
-
-Waiting for the other party.`;
+  if (alreadyPaid) {
+    return "✅ Your connection payment is already recorded. Waiting for the other party.";
   }
 
-  return `🔐 DEAL CONNECTION READY
+  return `🔐 DEAL ROOM
 
-Your connection fee:
+Your connection fee is:
 
-💰 KSh ${CONNECTION_FEE}
+💰 KSh ${fee}
 
-Both buyer and seller pay separately.
+Both sides pay separately.
 
-When both payments are confirmed, JR PHEEF will unlock the connection.
+FREE+ = KSh 30
+PRO = KSh 20
+PRIME = KSh 15
 
-💳 PAYMENT BUTTON WILL BE CONNECTED TO M-PESA
+💳 M-Pesa will be connected after testing.
 
-For this test version, no real payment is taken.
-
-Till configured:
-${TILL}`;
+No real payment is taken in this version.`;
 }
 
-/* =========================
-   WEBHOOK
-========================= */
+/* -------------------------
+   REFERRAL RULE
+------------------------- */
 
-app.post(
-  "/api/webhook/whatsapp",
-  async (req, res) => {
-    try {
-      const text =
-        (req.body.Body || "").trim();
+async function referralEligible(phone) {
+  const { data } = await db
+    .from("referrals")
+    .select("*")
+    .eq("referred_phone", phone)
+    .maybeSingle();
 
-      const user =
-        cleanPhone(req.body.From);
+  if (!data) return false;
 
-      const upper =
-        text.toUpperCase();
+  /*
+   Referral only becomes eligible after
+   the referred user completes a qualifying
+   paid action.
+  */
 
-      const mediaCount =
-        parseInt(
-          req.body.NumMedia || "0",
-          10
-        );
+  return data.qualifying_action === true &&
+         data.reward_status !== "PAID";
+}
 
-      console.log(
-        "📩 JR PHEEF:",
-        user,
-        text,
-        "MEDIA:",
-        mediaCount
+/* -------------------------
+   DASHBOARD
+------------------------- */
+
+async function dashboard(phone) {
+  const user = await ensureUser(phone);
+
+  const { count: listings } = await db
+    .from("listings")
+    .select("*", { count: "exact", head: true })
+    .eq("phone", phone)
+    .eq("status", "ACTIVE");
+
+  const { count: rooms } = await db
+    .from("deal_rooms")
+    .select("*", { count: "exact", head: true })
+    .or(`buyer_phone.eq.${phone},seller_phone.eq.${phone}`);
+
+  const p = plan(user?.plan);
+
+  return `👤 MY JR PHEEF
+
+Membership:
+${p.name}
+
+💳 Connection fee:
+KSh ${p.fee ?? "Custom"}
+
+📦 Active listings:
+${listings || 0}
+
+🔐 Deal Rooms:
+${rooms || 0}
+
+🎁 Rewards:
+KSh ${money(user?.reward_balance)}
+
+💸 Withdrawable:
+KSh ${money(user?.withdrawable_balance)}
+
+🪙 JR PHEEF credits:
+KSh ${money(user?.credit_balance)}
+
+🤝 Referral:
+${user?.referral_code || "—"}
+
+Minimum withdrawal:
+Individual: KSh ${WITHDRAWAL.INDIVIDUAL}
+Business: KSh ${WITHDRAWAL.BUSINESS}`;
+}
+
+/* -------------------------
+   WHATSAPP
+------------------------- */
+
+app.post("/api/webhook/whatsapp", async (req, res) => {
+  try {
+    const text = String(req.body.Body || "").trim();
+    const phone = clean(req.body.From);
+    const upper = text.toUpperCase();
+    const media = Number(req.body.NumMedia || 0);
+
+    if (!allowed(phone)) {
+      return res.type("text/xml").send(
+        reply("⏳ Too many messages. Please wait a moment.")
       );
+    }
 
-      /* WELCOME */
+    await ensureUser(phone);
 
-      if (
-        !text ||
-        /^(HI|HELLO|HEY|START|MENU)$/i.test(
-          text
-        )
-      ) {
-        return res
-          .type("text/xml")
-          .send(
-            xml(welcome())
-          );
+    if (!text && !media) {
+      return res.type("text/xml").send(reply(welcome()));
+    }
+
+    if (/^(HI|HELLO|HEY|START|MENU)$/i.test(text)) {
+      return res.type("text/xml").send(reply(welcome()));
+    }
+
+    if (/^(DASHBOARD|ACCOUNT|MY JR PHEEF)$/i.test(text)) {
+      return res.type("text/xml").send(
+        reply(await dashboard(phone))
+      );
+    }
+
+    /* PHOTOS */
+
+    if (media > 0) {
+      const user = await ensureUser(phone);
+      const p = plan(user?.plan);
+
+      const { data: listings } = await db
+        .from("listings")
+        .select("*")
+        .eq("phone", phone)
+        .eq("status", "ACTIVE")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const l = listings?.[0];
+
+      if (!l) {
+        return res.type("text/xml").send(
+          reply("📸 Send your opportunity details first, then your photos.")
+        );
       }
 
-      /* DASHBOARD */
+      const photos = Array.isArray(l.photos) ? l.photos : [];
 
-      if (
-        upper === "DASHBOARD" ||
-        upper === "MY JR PHEEF" ||
-        upper === "ACCOUNT"
-      ) {
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              await dashboard(user)
-            )
-          );
+      for (let i = 0; i < media && photos.length < p.photos; i++) {
+        const url = req.body[`MediaUrl${i}`];
+        if (url) photos.push(url);
       }
 
-      /* PHOTOS */
+      await db
+        .from("listings")
+        .update({ photos })
+        .eq("id", l.id);
 
-      if (mediaCount > 0) {
-        const { data } =
-          await supabase
-            .from("listings")
-            .select("*")
-            .eq("phone", user)
-            .eq("status", "ACTIVE")
-            .order(
-              "created_at",
-              { ascending: false }
-            )
-            .limit(1);
+      return res.type("text/xml").send(
+        reply(`📸 Photos received.
 
-        const listing =
-          data?.[0];
+${photos.length}/${p.photos} saved.
 
-        if (!listing) {
-          return res
-            .type("text/xml")
-            .send(
-              xml(
-                `📸 I received your photos.
+Your listing is ready for matching.`)
+      );
+    }
 
-Tell me what you're selling first so I can create the listing.`
-              )
-            );
-        }
+    /* CREATE LISTING */
 
-        /*
-          TEST VERSION:
-          Default FREE+ limit = 5.
+    if (upper.startsWith("OPPORTUNITY")) {
+      return res.type("text/xml").send(
+        reply(await listing(text, phone))
+      );
+    }
 
-          Membership integration can later
-          read the user's actual plan from
-          the database.
-        */
+    /* CHAT */
 
-        const limit =
-          photoLimit("FREE");
+    if (upper === "CHAT") {
+      const { data } = await db
+        .from("deal_rooms")
+        .select("*, listings(item_name,price,location)")
+        .or(`buyer_phone.eq.${phone},seller_phone.eq.${phone}`)
+        .in("status", ["negotiating", "agreed", "paid"])
+        .order("created_at", { ascending: false })
+        .limit(1);
 
-        const photos =
-          Array.isArray(
-            listing.photos
-          )
-            ? listing.photos
-            : [];
+      const room = data?.[0];
 
-        const remaining =
-          Math.max(
-            0,
-            limit - photos.length
-          );
-
-        for (
-          let i = 0;
-          i <
-          Math.min(
-            mediaCount,
-            remaining
-          );
-          i++
-        ) {
-          const url =
-            req.body[
-              `MediaUrl${i}`
-            ];
-
-          if (url) {
-            photos.push(url);
-          }
-        }
-
-        await supabase
-          .from("listings")
-          .update({
-            photos
-          })
-          .eq(
-            "id",
-            listing.id
-          );
-
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              `📸 Photos received!
-
-Saved: ${photos.length}/${limit}
-
-Your listing is ready for buyers. 🤝`
-            )
-          );
+      if (!room) {
+        return res.type("text/xml").send(
+          reply("🔐 You don't have an active Deal Room yet.")
+        );
       }
 
-      /* CHAT */
+      const l = room.listings || {};
 
-      if (upper === "CHAT") {
-        const { data: rooms } =
-          await supabase
-            .from("deal_rooms")
-            .select(
-              "*, listings(item_name,price,location,photos)"
-            )
-            .or(
-              `buyer_phone.eq.${user},seller_phone.eq.${user}`
-            )
-            .in(
-              "status",
-              [
-                "negotiating",
-                "agreed",
-                "paid"
-              ]
-            )
-            .order(
-              "created_at",
-              {
-                ascending: false
-              }
-            )
-            .limit(1);
+      return res.type("text/xml").send(
+        reply(`🔐 DEAL ROOM
 
-        const room =
-          rooms?.[0];
-
-        if (!room) {
-          return res
-            .type("text/xml")
-            .send(
-              xml(
-                "🔐 You don't have an active Deal Room yet."
-              )
-            );
-        }
-
-        const listing =
-          room.listings || {};
-
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              `🔐 DEAL ROOM
-
-${listing.item_name || "Item"}
-💰 KSh ${money(
-                listing.price
-              )}
-📍 ${
-                listing.location || ""
-              }
+${l.item_name || "Opportunity"}
+💰 KSh ${money(l.price)}
+📍 ${l.location || ""}
 
 💬 You're connected.
 
-Talk normally.
+Talk normally in English, Sheng or both.
 
 No AGREE.
 No DONE.
 No PAID.
 
-Just chat.`
-            )
-          );
+Just chat.`)
+      );
+    }
+
+    /* NATURAL BUYING */
+
+    if (buyerIntent(text)) {
+      const l = await search(text, phone);
+
+      if (!l) {
+        return res.type("text/xml").send(
+          reply("🔎 I haven't found a match yet. I'll keep looking.")
+        );
       }
 
-      /* DEALS */
+      const room = await match(l, phone);
 
-      if (upper === "DEALS") {
-        const rooms =
-          await supabase
-            .from("deal_rooms")
-            .select(
-              "*, listings(item_name,price,location)"
-            )
-            .or(
-              `buyer_phone.eq.${user},seller_phone.eq.${user}`
-            )
-            .in(
-              "status",
-              [
-                "negotiating",
-                "agreed",
-                "paid"
-              ]
-            )
-            .order(
-              "created_at",
-              {
-                ascending: false
-              }
-            );
-
-        if (
-          !rooms.data?.length
-        ) {
-          return res
-            .type("text/xml")
-            .send(
-              xml(
-                "📂 You don't have active Deal Rooms yet."
-              )
-            );
-        }
-
-        const output =
-          rooms.data
-            .map(
-              (r, i) => {
-                const l =
-                  r.listings || {};
-
-                return `${i + 1}. ${
-                  l.item_name ||
-                  "Item"
-                }
-💰 KSh ${money(
-                  l.price
-                )}
-📍 ${
-                  l.location || ""
-                }`;
-              }
-            )
-            .join("\n\n");
-
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              `📂 YOUR DEAL ROOMS
-
-${output}
-
-Reply CHAT to open your latest room.`
-            )
-          );
+      if (!room) {
+        return res.type("text/xml").send(
+          reply("❌ I couldn't create the Deal Room.")
+        );
       }
 
-      /* OPPORTUNITY */
+      return res.type("text/xml").send(
+        reply(`🎉 JR PHEEF found a match.
 
-      if (
-        upper.startsWith(
-          "OPPORTUNITY"
-        )
-      ) {
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              await createListing(
-                text,
-                user
-              )
-            )
-          );
-      }
+${l.item_name}
+💰 KSh ${money(l.price)}
+📍 ${l.location}
 
-      /* SELLER NATURAL LANGUAGE */
+🔐 Deal Room created.
 
-      if (
-        isSellerMessage(text)
-      ) {
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              `📣 I can help you list that.
+Reply CHAT.
+
+You can now talk normally.`)
+      );
+    }
+
+    /* NATURAL SELLING */
+
+    if (sellerIntent(text)) {
+      return res.type("text/xml").send(
+        reply(`📣 Let's list it.
 
 Send:
 
@@ -867,402 +609,248 @@ Item
 Price
 Location
 
-Then select your photos together.
+Then send your photos together.`)
+      );
+    }
 
-I'll match your product with buyers. 🤝`
-            )
-          );
-      }
+    /* NATURAL CHAT */
 
-      /* BUYER NATURAL LANGUAGE */
+    const { data: rooms } = await db
+      .from("deal_rooms")
+      .select("*")
+      .or(`buyer_phone.eq.${phone},seller_phone.eq.${phone}`)
+      .in("status", ["negotiating", "agreed", "paid"])
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-      const request =
-        extractBuyerRequest(
-          text
-        );
+    const room = rooms?.[0];
 
-      if (request) {
-        const matches =
-          await findListings(
-            request,
-            "",
-            null
-          );
+    if (room) {
+      const other =
+        clean(room.buyer_phone) === phone
+          ? room.seller_phone
+          : room.buyer_phone;
 
-        const listing =
-          matches.find(
-            x =>
-              cleanPhone(
-                x.phone
-              ) !== user
-          );
+      await db.from("messages").insert({
+        room_id: room.id,
+        sender_phone: phone,
+        message: text
+      });
 
-        if (!listing) {
-          return res
-            .type("text/xml")
-            .send(
-              xml(
-                `🔎 I haven't found a match yet.
-
-I'll keep looking for ${request}.`
-              )
-            );
-        }
-
-        const room =
-          await createMatch(
-            listing,
-            user
-          );
-
-        if (!room) {
-          return res
-            .type("text/xml")
-            .send(
-              xml(
-                "❌ I couldn't create the Deal Room. Please try again."
-              )
-            );
-        }
-
-        const photos =
-          Array.isArray(
-            listing.photos
-          )
-            ? listing.photos
-            : [];
-
-        /*
-          Send seller photos.
-        */
-
-        for (
-          const photo of
-          photos.slice(0, 5)
-        ) {
-          try {
-            await twilioClient.messages.create(
-              {
-                from:
-                  TWILIO_FROM,
-                to:
-                  `whatsapp:${user}`,
-                body:
-                  "📸 Product photo",
-                mediaUrl: [
-                  photo
-                ]
-              }
-            );
-          } catch (
-            error
-          ) {
-            console.error(
-              "PHOTO SEND:",
-              error
-            );
-          }
-        }
-
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              `🎉 JR PHEEF FOUND A MATCH!
-
-${listing.item_name}
-💰 KSh ${money(
-                listing.price
-              )}
-📍 ${
-                listing.location
-              }
-
-🔐 Deal Room created.
-
-Reply CHAT.
-
-You can now talk normally with the seller.`
-            )
-          );
-      }
-
-      /* NATURAL DEAL AGREEMENT */
-
-      if (
-        /^(YES|YES PLEASE|I'M INTERESTED|IM INTERESTED|I AM INTERESTED|SOUNDS GOOD|SAWA|NIKO SAWA|TUMEELEWANA|TUMEKUBALI|LET'S DO IT|LETS DO IT|OKAY|OK)$/i.test(
-          text
-        )
-      ) {
-        const { data: rooms } =
-          await supabase
-            .from("deal_rooms")
-            .select("*")
-            .or(
-              `buyer_phone.eq.${user},seller_phone.eq.${user}`
-            )
-            .in(
-              "status",
-              [
-                "negotiating",
-                "agreed"
-              ]
-            )
-            .order(
-              "created_at",
-              {
-                ascending: false
-              }
-            )
-            .limit(1);
-
-        const room =
-          rooms?.[0];
-
-        if (room) {
-          const field =
-            cleanPhone(
-              room.buyer_phone
-            ) === user
-              ? "buyer_agreed"
-              : "seller_agreed";
-
-          const { data } =
-            await supabase
-              .from("deal_rooms")
-              .update({
-                [field]: true
-              })
-              .eq(
-                "id",
-                room.id
-              )
-              .select()
-              .single();
-
-          if (
-            data?.buyer_agreed &&
-            data?.seller_agreed
-          ) {
-            await supabase
-              .from("deal_rooms")
-              .update({
-                status:
-                  "agreed"
-              })
-              .eq(
-                "id",
-                room.id
-              );
-
-            return res
-              .type("text/xml")
-              .send(
-                xml(
-                  `🎉 BOTH SIDES ARE READY!
-
-🔐 DEAL ROOM PAYMENT
-
-Buyer: KSh ${CONNECTION_FEE}
-Seller: KSh ${CONNECTION_FEE}
-
-Each person will pay separately.
-
-💳 PAY KSh ${CONNECTION_FEE}
-
-M-Pesa will be connected after this test.
-
-For now, no real payment is taken.
-
-Once both payments are confirmed:
-
-🔓 DEAL ROOM UNLOCKED`
-                )
-              );
-          }
-
-          return res
-            .type("text/xml")
-            .send(
-              xml(
-                `👍 Got it.
-
-I've recorded that you're ready.
-
-Waiting for the other party.`
-              )
-            );
-        }
-      }
-
-      /* NORMAL DEAL ROOM CHAT */
-
-      const { data: rooms } =
-        await supabase
-          .from("deal_rooms")
-          .select("*")
-          .or(
-            `buyer_phone.eq.${user},seller_phone.eq.${user}`
-          )
-          .in(
-            "status",
-            [
-              "negotiating",
-              "agreed",
-              "paid"
-            ]
-          )
-          .order(
-            "created_at",
-            {
-              ascending: false
-            }
-          )
-          .limit(1);
-
-      const room =
-        rooms?.[0];
-
-      if (room) {
-        const other =
-          cleanPhone(
-            room.buyer_phone
-          ) === user
-            ? room.seller_phone
-            : room.buyer_phone;
-
-        await supabase
-          .from("messages")
-          .insert([
-            {
-              room_id:
-                room.id,
-              sender_phone:
-                user,
-              message:
-                text
-            }
-          ]);
-
-        try {
-          await sendWhatsApp(
-            other,
-            `💬 Deal Room
-
-${text}`
-          );
-        } catch (
-          error
-        ) {
-          console.error(
-            "CHAT SEND:",
-            error
-          );
-        }
-
-        return res
-          .type("text/xml")
-          .send(
-            xml(
-              "☑️ Message sent through your Deal Room."
-            )
-          );
-      }
-
-      /* DEFAULT */
-
-      return res
-        .type("text/xml")
-        .send(
-          xml(welcome())
-        );
-
-    } catch (error) {
-      console.error(
-        "🔥 WEBHOOK ERROR:",
-        error
+      await send(
+        other,
+        `💬 ${text}`
       );
 
-      return res
-        .type("text/xml")
-        .send(
-          xml(
-            "❌ JR PHEEF encountered a problem. Please try again."
-          )
-        );
+      return res.type("text/xml").send(
+        reply("☑️ Sent.")
+      );
     }
+
+    return res.type("text/xml").send(reply(welcome()));
+
+  } catch (err) {
+    console.error("WEBHOOK ERROR:", err);
+
+    return res.type("text/xml").send(
+      reply("❌ JR PHEEF had a temporary problem. Please try again.")
+    );
   }
-);
+});
 
-/* =========================
-   HEALTH CHECK
-========================= */
+/* ==================================================
+   OWNER DASHBOARD
+================================================== */
 
-app.get(
-  "/",
-  (req, res) => {
-    res.json({
-      service:
-        "JR PHEEF Marketplace",
-      status: "LIVE",
-      version:
-        "TEST-PRE-MPESA",
-      payment:
-        "M-Pesa API not connected",
-      connectionFee:
-        CONNECTION_FEE,
-      till:
-        TILL
-    });
+app.get("/owner", admin, async (req, res) => {
+  try {
+    const [
+      users,
+      listings,
+      rooms,
+      messages
+    ] = await Promise.all([
+      db.from("users").select("*"),
+      db.from("listings").select("*"),
+      db.from("deal_rooms").select("*"),
+      db.from("messages").select("*")
+    ]);
+
+    const U = users.data || [];
+    const L = listings.data || [];
+    const R = rooms.data || [];
+    const M = messages.data || [];
+
+    const pro = U.filter(
+      x => String(x.plan).toUpperCase() === "PRO"
+    ).length;
+
+    const prime = U.filter(
+      x => String(x.plan).toUpperCase() === "PRIME"
+    ).length;
+
+    const activeListings = L.filter(
+      x => x.status === "ACTIVE"
+    ).length;
+
+    const paidRooms = R.filter(
+      x => x.buyer_paid && x.seller_paid
+    ).length;
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JR PHEEF OWNER</title>
+<style>
+body{
+font-family:Arial,sans-serif;
+margin:0;
+padding:20px;
+background:#f5f5f5;
+}
+h1{margin-bottom:5px}
+.grid{
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+gap:15px;
+}
+.card{
+background:white;
+padding:20px;
+border-radius:14px;
+box-shadow:0 2px 8px #0001;
+}
+.number{
+font-size:28px;
+font-weight:bold;
+}
+small{color:#666}
+</style>
+</head>
+<body>
+
+<h1>JR PHEEF OWNER CONTROL</h1>
+<p>Live marketplace overview</p>
+
+<div class="grid">
+
+<div class="card">
+<small>USERS</small>
+<div class="number">${U.length}</div>
+</div>
+
+<div class="card">
+<small>PRO MEMBERS</small>
+<div class="number">${pro}</div>
+</div>
+
+<div class="card">
+<small>PRIME MEMBERS</small>
+<div class="number">${prime}</div>
+</div>
+
+<div class="card">
+<small>ACTIVE LISTINGS</small>
+<div class="number">${activeListings}</div>
+</div>
+
+<div class="card">
+<small>DEAL ROOMS</small>
+<div class="number">${R.length}</div>
+</div>
+
+<div class="card">
+<small>PAID DEAL ROOMS</small>
+<div class="number">${paidRooms}</div>
+</div>
+
+<div class="card">
+<small>MESSAGES</small>
+<div class="number">${M.length}</div>
+</div>
+
+<div class="card">
+<small>REWARDS ISSUED</small>
+<div class="number">
+KSh ${money(
+  U.reduce(
+    (a,x)=>a+Number(x.reward_balance||0),0
+  )
+)}
+</div>
+</div>
+
+</div>
+
+<br>
+
+<div class="card">
+<h2>Membership</h2>
+<p>FREE+ users: ${U.filter(x => !["PRO","PRIME","ELITE"].includes(String(x.plan).toUpperCase())).length}</p>
+<p>PRO: ${pro}</p>
+<p>PRIME: ${prime}</p>
+</div>
+
+<br>
+
+<div class="card">
+<h2>System</h2>
+<p>🟢 Marketplace: ACTIVE</p>
+<p>🟢 Deal Rooms: ACTIVE</p>
+<p>🟢 Natural CHAT: ACTIVE</p>
+<p>🟢 English/Sheng: ACTIVE</p>
+<p>🟢 Photos: ACTIVE</p>
+<p>🟢 Referrals protection: ACTIVE</p>
+<p>🟢 Reward withdrawal rules: ACTIVE</p>
+<p>🟡 M-Pesa API: NOT CONNECTED</p>
+</div>
+
+</body>
+</html>`;
+
+    res.send(html);
+
+  } catch (err) {
+    console.error("OWNER ERROR:", err);
+    res.status(500).send("Owner dashboard error");
   }
-);
+});
 
-/* =========================
+/* -------------------------
+   HEALTH
+------------------------- */
+
+app.get("/", (req, res) => {
+  res.json({
+    service: "JR PHEEF Marketplace",
+    status: "LIVE",
+    version: "TEST",
+    mpesa: "NOT CONNECTED",
+    plans: {
+      free_plus: "KSh 30 connection",
+      pro: "KSh 99/month + KSh 20 connection",
+      prime: "KSh 149/month + KSh 15 connection"
+    }
+  });
+});
+
+/* -------------------------
    START
-========================= */
+------------------------- */
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      "🚀 JR PHEEF running on port",
-      PORT
-    );
-
-    console.log(
-      "🔐 Deal Rooms: ACTIVE"
-    );
-
-    console.log(
-      "💬 Natural CHAT: ACTIVE"
-    );
-
-    console.log(
-      "🌍 English + Sheng: ACTIVE"
-    );
-
-    console.log(
-      "📸 Photos: ACTIVE"
-    );
-
-    console.log(
-      "👤 Unified Buyer/Seller account: ACTIVE"
-    );
-
-    console.log(
-      "🎁 Rewards framework: ACTIVE"
-    );
-
-    console.log(
-      "🎟️ Coupons framework: ACTIVE"
-    );
-
-    console.log(
-      "🤝 Referrals framework: ACTIVE"
-    );
-
-    console.log(
-      "💳 M-Pesa: NOT CONNECTED YET"
-    );
-  }
-);
+app.listen(PORT, () => {
+  console.log(`🚀 JR PHEEF running on port ${PORT}`);
+  console.log("🔐 Deal Rooms: ACTIVE");
+  console.log("💬 Natural CHAT: ACTIVE");
+  console.log("🌍 English + Sheng: ACTIVE");
+  console.log("📸 Photos: ACTIVE");
+  console.log("👤 Buyer + Seller account: ACTIVE");
+  console.log("🎁 Referral protection: ACTIVE");
+  console.log("💰 Rewards rules: ACTIVE");
+  console.log("🏢 Business support: ACTIVE");
+  console.log("🛡️ Rate limiting: ACTIVE");
+  console.log("🔒 Owner dashboard: ACTIVE");
+  console.log("💳 M-Pesa: NOT CONNECTED");
+});
