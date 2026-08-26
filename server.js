@@ -662,4 +662,4 @@ app.listen(PORT, () => {
   console.log("🏢 Business accounts: READY");
   console.log("🔒 Owner dashboard: ACTIVE");
   console.log("💳 M-Pesa: NOT CONNECTED");
-});
+}); 
