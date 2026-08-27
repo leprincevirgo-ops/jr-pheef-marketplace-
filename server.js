@@ -10,10 +10,10 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const BASE = "https://jr-pheef-marketplace.onrender.com";
 
-const KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_ANON_KEY;
-const db = process.env.SUPABASE_URL && KEY
-  ? createClient(process.env.SUPABASE_URL, KEY)
-  : null;
+const supabase =
+  process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY
+    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY)
+    : null;
 
 const plans = {
   free: { price: 0, match: 30 },
@@ -21,88 +21,134 @@ const plans = {
   prime: { price: 149, match: 20 }
 };
 
-const deals = new Map();
-const payments = new Map();
-const activity = [];
-
-const log = (type, data = {}) => {
-  activity.unshift({ type, ...data, time: new Date().toISOString() });
-  activity.splice(50);
+const mem = {
+  users: new Map(),
+  listings: new Map(),
+  deals: new Map(),
+  transactions: new Map(),
+  deliveries: new Map(),
+  referrals: new Map(),
+  coupons: new Map([
+    ["WELCOME10", { discount: 10, active: true }]
+  ]),
+  activity: []
 };
 
-const clean = x => String(x || "").replace(/^whatsapp:/, "").trim();
+const id = p =>
+  `${p}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
 
-function passwordHash(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
+const hash = password =>
+  crypto.createHash("sha256").update(password).digest("hex");
+
+const log = (type, data = {}) => {
+  mem.activity.unshift({ type, ...data, time: new Date().toISOString() });
+  mem.activity.length = Math.min(mem.activity.length, 100);
+};
+
+async function db(table, action, data) {
+  if (!supabase) return null;
+
+  try {
+    if (action === "insert")
+      return await supabase.from(table).insert(data).select().single();
+
+    if (action === "upsert")
+      return await supabase.from(table).upsert(data).select().single();
+
+    if (action === "select")
+      return await supabase.from(table).select("*");
+
+    if (action === "one")
+      return await supabase.from(table).select("*").eq(data.key, data.value).maybeSingle();
+  } catch (e) {
+    console.log("DB:", e.message);
+  }
+
+  return null;
 }
 
-function passwordOK(password, stored) {
-  if (!stored || !stored.includes(":")) return false;
-  const [salt, oldHash] = stored.split(":");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return crypto.timingSafeEqual(
-    Buffer.from(hash, "hex"),
-    Buffer.from(oldHash, "hex")
-  );
+async function findUser(phone) {
+  if (mem.users.has(phone)) return mem.users.get(phone);
+
+  const r = await db("members", "one", {
+    key: "phone",
+    value: phone
+  });
+
+  if (r?.data) {
+    const u = r.data;
+    mem.users.set(phone, u);
+    return u;
+  }
+
+  return null;
 }
 
-async function getUser(phone) {
-  if (!db) return null;
-
-  const { data, error } = await db
-    .from("members")
-    .select("*")
-    .eq("phone", clean(phone))
-    .maybeSingle();
-
-  if (error) console.log("DB:", error.message);
-  return data || null;
+function esc(x = "") {
+  return String(x)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function page(title, body) {
-  return `<!doctype html><html><head>
+  return `<!doctype html>
+<html>
+<head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
+<title>${esc(title)}</title>
 <style>
-:root{--c:#08783c;--bg:#f3f8f5}
-*{box-sizing:border-box}body{margin:0;font-family:Arial;background:var(--bg)}
-header{background:#063d20;color:white;padding:24px}
-main{max-width:700px;margin:auto;padding:15px}
-.card{background:white;margin:14px 0;padding:20px;border-radius:18px;
-box-shadow:0 2px 10px #0001}
-input,select{width:100%;padding:12px;margin:6px 0;border:1px solid #ccc;border-radius:9px}
-button,.btn{background:var(--c);color:white;border:0;padding:12px 18px;
-border-radius:10px;text-decoration:none;display:inline-block;margin:4px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.stat{font-size:25px;font-weight:bold}.small{opacity:.7;font-size:13px}
-</style></head><body>${body}</body></html>`;
+:root{--c:#08783c;--bg:#f4f7f5;--card:#fff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font-family:Arial;color:#111}
+header{background:#063d20;color:white;padding:22px}
+main{max-width:850px;margin:auto;padding:15px}
+.card{background:var(--card);padding:18px;margin:12px 0;
+border-radius:16px;box-shadow:0 2px 9px #0001}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+button,.btn{background:var(--c);color:#fff;border:0;border-radius:10px;
+padding:11px 15px;text-decoration:none;display:inline-block;margin:4px}
+input,select,textarea{width:100%;padding:11px;margin:5px 0;
+border:1px solid #ccc;border-radius:9px}
+.stat{font-size:26px;font-weight:bold}
+.small{font-size:12px;opacity:.65}
+</style>
+</head>
+<body>${body}</body></html>`;
 }
 
-/* WELCOME */
+/* WELCOME / LOGIN */
 
-app.get("/", (_, res) => res.send(page("JR PHEEF", `
-<header><h1>JR PHEEF</h1><p>Find. Match. Trade.</p></header>
+app.get("/", (req, res) => res.send(page("JR PHEEF", `
+<header>
+<h1>JR PHEEF</h1>
+<p>Find. Match. Trade.</p>
+</header>
 <main>
 <div class="card">
 <h2>👋 Karibu JR PHEEF</h2>
-<p>Buy, sell, find opportunities and connect safely.</p>
+<p>Buy • Sell • Services • Jobs • Transport • Opportunities</p>
+
 <form method="POST" action="/signup">
-<input name="name" placeholder="Full name" required>
+<input name="name" placeholder="Full real name" required>
 <input name="year" type="number" placeholder="Birth year" required>
-<input name="phone" placeholder="Phone e.g. +2547..." required>
+<input name="phone" placeholder="Phone number" required>
 <input name="password" type="password" placeholder="Create password" required>
-<button>Create JR PHEEF Account</button>
+<select name="type">
+<option value="individual">Individual</option>
+<option value="business">Business / Institution</option>
+</select>
+<button>Create account</button>
 </form>
 </div>
 
 <div class="card">
-<h3>🔐 Already a member?</h3>
+<h3>Already a member?</h3>
 <form method="POST" action="/login">
 <input name="phone" placeholder="Phone number" required>
 <input name="password" type="password" placeholder="Password" required>
-<button>Sign In</button>
+<button>Sign in</button>
 </form>
 </div>
 </main>`)));
@@ -110,75 +156,82 @@ app.get("/", (_, res) => res.send(page("JR PHEEF", `
 /* SIGN UP */
 
 app.post("/signup", async (req, res) => {
-  if (!db) return res.status(503).send("Supabase is not connected.");
+  const { name, year, phone, password, type } = req.body;
 
-  const name = String(req.body.name || "").trim();
-  const birth_year = Number(req.body.year);
-  const phone = clean(req.body.phone);
-  const password = String(req.body.password || "");
+  if (!name || !year || !phone || !password)
+    return res.status(400).send("Missing account information.");
 
-  if (!name || !birth_year || !phone || password.length < 6)
-    return res.status(400).send("Complete all fields. Password must be at least 6 characters.");
+  if (await findUser(phone))
+    return res.send(`Account already exists.<br><a href="/">Sign in</a>`);
 
-  const existing = await getUser(phone);
+  const u = {
+    id: id("USR"),
+    full_name: name,
+    name,
+    birth_year: Number(year),
+    phone,
+    password_hash: hash(password),
+    plan: "free",
+    rewards: 0,
+    credits: 0,
+    referrals: 0,
+    account_type: type || "individual",
+    referral_code: `JRP-${crypto.randomBytes(3).toString("hex").toUpperCase()}`,
+    theme: "green",
+    status: "active",
+    verified: false,
+    created_at: new Date().toISOString()
+  };
 
-  if (existing) {
-    if (existing.password_hash)
-      return res.send("Account already exists. <a href='/'>Sign in</a>");
+  mem.users.set(phone, u);
 
-    const { error } = await db.from("members").update({
-      full_name: name,
-      birth_year,
-      password_hash: passwordHash(password),
-      plan: "free",
-      rewards: 0,
-      credits: 0,
-      referrals: 0,
-      theme: "jr-green",
-      account_type: "individual"
-    }).eq("id", existing.id);
-
-    if (error) return res.status(500).send(error.message);
-  } else {
-    const { error } = await db.from("members").insert({
+  if (supabase) {
+    const r = await db("members", "upsert", {
       full_name: name,
       phone,
-      birth_year,
-      password_hash: passwordHash(password),
+      birth_year: Number(year),
+      password_hash: u.password_hash,
       plan: "free",
-      rewards: 0,
-      credits: 0,
-      referrals: 0,
-      theme: "jr-green",
-      account_type: "individual",
+      status: "active",
       verified: false,
-      status: "active"
+      reputation: 0,
+      referral_code: u.referral_code
     });
 
-    if (error) return res.status(500).send(error.message);
+    if (r?.data) {
+      u.id = r.data.id;
+      mem.users.set(phone, u);
+    }
   }
 
-  log("New account", { name, phone });
+  log("ACCOUNT_CREATED", { phone, name });
+
   res.redirect(`/home?phone=${encodeURIComponent(phone)}`);
 });
 
 /* LOGIN */
 
 app.post("/login", async (req, res) => {
-  const phone = clean(req.body.phone);
-  const u = await getUser(phone);
+  const { phone, password } = req.body;
+  const u = await findUser(phone);
 
-  if (!u || !passwordOK(req.body.password, u.password_hash))
-    return res.status(401).send("❌ Incorrect phone number or password. <a href='/'>Try again</a>");
+  if (!u || u.password_hash !== hash(password))
+    return res.status(401).send(`
+      <h2>Login failed</h2>
+      <p>Phone number or password is incorrect.</p>
+      <a href="/">Try again</a>
+    `);
 
-  log("Login", { phone });
+  u.last_login = new Date().toISOString();
+  log("LOGIN", { phone });
+
   res.redirect(`/home?phone=${encodeURIComponent(phone)}`);
 });
 
-/* HOME */
+/* USER HOME */
 
 app.get("/home", async (req, res) => {
-  const u = await getUser(req.query.phone);
+  const u = await findUser(req.query.phone);
   if (!u) return res.redirect("/");
 
   const plan = plans[u.plan] || plans.free;
@@ -186,152 +239,356 @@ app.get("/home", async (req, res) => {
   res.send(page("JR PHEEF", `
 <header>
 <h1>JR PHEEF</h1>
-<p>Welcome, ${u.full_name} 👋</p>
-<b>${String(u.plan || "free").toUpperCase()}</b>
+<p>Welcome, ${esc(u.full_name || u.name)} 👋</p>
+<b>${u.plan.toUpperCase()}</b>
 </header>
 
 <main>
 
+<div class="grid">
+<div class="card"><h3>🔎 Find</h3><p>Products, services, jobs and opportunities.</p></div>
+<div class="card"><h3>🏪 Sell</h3><a class="btn" href="/list?phone=${encodeURIComponent(u.phone)}">Create listing</a></div>
+<div class="card"><h3>🤝 Matches</h3><p>Find the right people and opportunities.</p></div>
+<div class="card"><h3>💬 Deal Rooms</h3><a class="btn" href="/deal?phone=${encodeURIComponent(u.phone)}">Open</a></div>
+<div class="card"><h3>🚚 Delivery</h3><a class="btn" href="/delivery?phone=${encodeURIComponent(u.phone)}">Request</a></div>
+<div class="card"><h3>💳 Payments</h3><p>Secure payment flow — TEST MODE.</p></div>
+</div>
+
 <div class="card">
-<h2>🏠 Your JR PHEEF</h2>
-<p>One account. Buyer + Seller.</p>
-<select>
-<option>JR PHEEF Green</option>
-<option>Black</option>
-<option>Blue</option>
-<option>Purple</option>
-<option>Gold</option>
+<h2>🎁 Your JR PHEEF Wallet</h2>
+<p>Rewards: <b>KSh ${u.rewards || 0}</b></p>
+<p>JR PHEEF Credits: <b>KSh ${u.credits || 0}</b></p>
+<p>Referrals: <b>${u.referrals || 0}</b></p>
+<p>Individual minimum withdrawal: KSh 200</p>
+<p class="small">Rewards withdrawal and real M-Pesa transfers will activate after payment integration.</p>
+</div>
+
+<div class="card">
+<h2>⭐ Membership</h2>
+<p>FREE — first month free — KSh 30 match</p>
+<p>PRO — KSh 99/month — KSh 20 match</p>
+<p>PRIME — KSh 149/month — KSh 20 match</p>
+<a class="btn" href="/upgrade?phone=${encodeURIComponent(u.phone)}&plan=pro">Try PRO</a>
+<a class="btn" href="/upgrade?phone=${encodeURIComponent(u.phone)}&plan=prime">Try PRIME</a>
+</div>
+
+<div class="card">
+<h2>🎟️ Coupons & Discounts</h2>
+<form method="POST" action="/coupon">
+<input type="hidden" name="phone" value="${esc(u.phone)}">
+<input name="code" placeholder="Enter coupon">
+<button>Apply</button>
+</form>
+</div>
+
+<div class="card">
+<h2>👥 Refer & Earn</h2>
+<p>Your code: <b>${esc(u.referral_code || "JRP-NEW")}</b></p>
+<p>Share your code with friends and businesses.</p>
+</div>
+
+<div class="card">
+<h2>🎨 Theme</h2>
+<select onchange="document.documentElement.style.setProperty('--c',this.value)">
+<option value="#08783c">JR PHEEF</option>
+<option value="#111">Black</option>
+<option value="#2563eb">Blue</option>
+<option value="#7c3aed">Purple</option>
+<option value="#b8860b">Gold</option>
 </select>
 </div>
 
-<div class="grid">
-<div class="card"><h3>🛒 BUY</h3><p>Products, services, jobs & opportunities.</p></div>
-<div class="card"><h3>🏪 SELL</h3><p>List and manage what you sell.</p></div>
-<div class="card"><h3>🤝 MATCHES</h3><p>Buyer and seller connections.</p></div>
-<div class="card"><h3>💬 DEAL</h3>
-<a class="btn" href="/deal?phone=${encodeURIComponent(u.phone)}">Open</a></div>
-<div class="card"><h3>🚚 DELIVERY</h3><p>Riders, movers & transport.</p></div>
-<div class="card"><h3>💳 PAY</h3><p>Payments & transaction history.</p></div>
-</div>
-
-<div class="card">
-<h3>🎁 REWARDS</h3>
-<p>Rewards: <b>KSh ${u.rewards || 0}</b></p>
-<p>JR PHEEF Credits: <b>${u.credits || 0}</b></p>
-<p>Referrals: ${u.referrals || 0}</p>
-<p>Minimum individual withdrawal: <b>KSh 200</b></p>
-</div>
-
-<div class="card">
-<h3>🎟️ COUPONS & DISCOUNTS</h3>
-<p>Your available offers will appear here.</p>
-</div>
-
-<div class="card">
-<h3>👥 REFER & EARN</h3>
-<p>Your referral code: <b>JRP-${String(u.id).slice(-6)}</b></p>
-</div>
-
-<div class="card">
-<h3>⭐ MEMBERSHIP</h3>
-<p>FREE — First month free — KSh 30 match</p>
-<p>PRO — KSh 99/month — KSh 20 match</p>
-<p>PRIME — KSh 149/month — KSh 20 match</p>
-<a class="btn" href="/upgrade?phone=${encodeURIComponent(u.phone)}&plan=pro">PRO</a>
-<a class="btn" href="/upgrade?phone=${encodeURIComponent(u.phone)}&plan=prime">PRIME</a>
-</div>
+<a class="btn" href="/">Sign out</a>
 
 </main>`));
 });
 
-/* UPGRADE — TEST */
+/* LISTING */
 
-app.get("/upgrade", async (req, res) => {
-  const u = await getUser(req.query.phone);
-  const plan = plans[req.query.plan];
+app.get("/list", async (req, res) => {
+  const u = await findUser(req.query.phone);
+  if (!u) return res.redirect("/");
 
-  if (!u || !plan) return res.status(400).send("Invalid upgrade.");
+  res.send(page("Create Listing", `
+<header><h1>🏪 JR PHEEF</h1></header>
+<main>
+<div class="card">
+<h2>Create a listing</h2>
+<form method="POST" action="/list">
+<input type="hidden" name="phone" value="${esc(u.phone)}">
+<input name="title" placeholder="What are you offering?" required>
+<textarea name="description" placeholder="Description"></textarea>
+<input name="price" type="number" placeholder="Price" min="100" required>
+<input name="location" placeholder="Location" required>
+<input name="category" placeholder="Category">
+<input name="photos" placeholder="Photo URLs, separated by commas">
+<button>Publish</button>
+</form>
+<p class="small">
+Individuals may add multiple photos. Businesses can use up to 20 photos.
+</p>
+</div>
+</main>`));
+});
 
-  await db.from("members")
-    .update({ plan: req.query.plan })
-    .eq("id", u.id);
+app.post("/list", async (req, res) => {
+  const u = await findUser(req.body.phone);
+  if (!u) return res.status(401).send("Sign in first.");
 
-  log("Upgrade", { phone: u.phone, plan: req.query.plan });
-  res.redirect(`/home?phone=${encodeURIComponent(u.phone)}`);
+  const l = {
+    id: id("LIST"),
+    member_id: u.id,
+    title: req.body.title,
+    description: req.body.description || "",
+    price: Number(req.body.price),
+    location: req.body.location,
+    category: req.body.category || "General",
+    photos: (req.body.photos || "").split(",").map(x => x.trim()).filter(Boolean),
+    status: "active",
+    created_at: new Date().toISOString()
+  };
+
+  if (u.account_type === "business" && l.photos.length > 20)
+    l.photos = l.photos.slice(0, 20);
+
+  mem.listings.set(l.id, l);
+
+  await db("jr_listings", "insert", l);
+
+  log("LISTING_CREATED", { listing: l.id, phone: u.phone });
+
+  res.send(page("Listing Published", `
+<header><h1>JR PHEEF</h1></header>
+<main><div class="card">
+<h2>✅ Listing published</h2>
+<p>${esc(l.title)}</p>
+<p>KSh ${l.price}</p>
+<p>${esc(l.location)}</p>
+<a class="btn" href="/home?phone=${encodeURIComponent(u.phone)}">Return</a>
+</div></main>`));
+});
+
+/* SEARCH */
+
+app.get("/find", async (req, res) => {
+  const q = (req.query.q || "").toLowerCase();
+  const list = [...mem.listings.values()].filter(x =>
+    `${x.title} ${x.description} ${x.category} ${x.location}`
+      .toLowerCase().includes(q)
+  );
+
+  res.send(page("JR PHEEF Find", `
+<header><h1>🔎 Find</h1></header>
+<main>
+<div class="card">
+<form>
+<input name="q" value="${esc(q)}" placeholder="What are you looking for?">
+<button>Search</button>
+</form>
+</div>
+
+${list.map(x => `
+<div class="card">
+<h3>${esc(x.title)}</h3>
+<p>${esc(x.description)}</p>
+<b>KSh ${x.price}</b>
+<p>${esc(x.location)}</p>
+<a class="btn" href="/deal?listing=${encodeURIComponent(x.id)}">Match</a>
+</div>`).join("") || `<div class="card"><p>No matches yet.</p></div>`}
+</main>`));
 });
 
 /* DEAL ROOM */
 
 app.get("/deal", async (req, res) => {
-  const u = await getUser(req.query.phone);
+  const u = await findUser(req.query.phone);
   if (!u) return res.redirect("/");
 
-  const fee = (plans[u.plan] || plans.free).match;
+  const fee = plans[u.plan]?.match || 30;
 
   const d = {
-    id: `DEAL-${Date.now()}`,
-    buyer: u.phone,
-    amount: fee,
-    status: "awaiting_payment"
+    id: id("DEAL"),
+    buyer_id: u.id,
+    buyer_phone: u.phone,
+    seller_id: null,
+    listing_id: req.query.listing || null,
+    buyer_paid: 0,
+    seller_paid: 0,
+    status: "open",
+    created_at: new Date().toISOString()
   };
 
-  deals.set(d.id, d);
-  log("Deal opened", { deal: d.id });
+  mem.deals.set(d.id, d);
+  await db("jr_deals", "insert", d);
 
-  res.send(page("JR PHEEF Deal", `
-<header><h1>🤝 Deal Room</h1></header>
-<main><div class="card">
-<h2>JR PHEEF Match</h2>
-<p>Customer: ${u.full_name}</p>
-<p>Plan: ${String(u.plan).toUpperCase()}</p>
+  log("DEAL_OPENED", { deal: d.id });
+
+  res.send(page("Deal Room", `
+<header><h1>🤝 JR PHEEF Deal Room</h1></header>
+<main>
+<div class="card">
+<h2>Deal ${d.id}</h2>
 <p>Match fee: <b>KSh ${fee}</b></p>
-<p class="small">TEST MODE — no real money moves.</p>
-<form method="POST" action="/pay">
+<p>Both parties can pay inside the Deal Room.</p>
+
+<form method="POST" action="/deal/pay">
 <input type="hidden" name="deal" value="${d.id}">
-<button>💳 Test Payment</button>
+<input type="hidden" name="phone" value="${esc(u.phone)}">
+<select name="side">
+<option value="buyer">Buyer</option>
+<option value="seller">Seller</option>
+</select>
+<button>💳 Pay KSh ${fee}</button>
 </form>
-</div></main>`));
+
+<p class="small">
+TEST PAYMENT ONLY. No real money is moved until M-Pesa/international payment APIs are connected.
+</p>
+</div>
+</main>`));
 });
 
 /* TEST PAYMENT */
 
-app.post("/pay", (req, res) => {
-  const d = deals.get(req.body.deal);
-  if (!d) return res.status(404).send("Deal not found.");
+app.post("/deal/pay", async (req, res) => {
+  const d = mem.deals.get(req.body.deal);
+  const u = await findUser(req.body.phone);
 
-  const p = {
-    id: `PAY-${Date.now()}`,
-    deal: d.id,
-    amount: d.amount,
+  if (!d || !u) return res.status(404).send("Deal not found.");
+
+  const fee = plans[u.plan]?.match || 30;
+
+  const t = {
+    id: id("PAY"),
+    member_id: u.id,
+    deal_id: d.id,
+    type: req.body.side === "seller" ? "seller_match_fee" : "buyer_match_fee",
+    amount: fee,
     status: "SUCCESS",
-    mode: "TEST",
-    time: new Date().toISOString()
+    method: "TEST",
+    created_at: new Date().toISOString()
   };
 
-  payments.set(p.id, p);
-  d.status = "paid";
-  log("Payment", { payment: p.id, amount: p.amount });
+  if (req.body.side === "seller") d.seller_paid = fee;
+  else d.buyer_paid = fee;
 
-  res.send(page("JR PHEEF Payment", `
+  d.status =
+    d.buyer_paid && d.seller_paid ? "paid_by_both" : "awaiting_other_party";
+
+  mem.transactions.set(t.id, t);
+
+  await db("jr_transactions", "insert", t);
+
+  log("PAYMENT", { deal: d.id, amount: fee, side: req.body.side });
+
+  res.send(page("Payment", `
 <header><h1>JR PHEEF</h1></header>
-<main><div class="card" style="text-align:center">
-<div style="font-size:60px">✅</div>
-<h2>Payment Received</h2>
-<h1>KSh ${p.amount}</h1>
-<p>Deal Room payment confirmed.</p>
-<p>${p.id}</p>
-<p class="small">TEST MODE — M-Pesa not connected.</p>
-<a class="btn" href="/">Done</a>
+<main><div class="card">
+<h2>✅ Payment recorded</h2>
+<p>KSh ${fee}</p>
+<p>Side: ${esc(req.body.side)}</p>
+<p>Status: ${d.status}</p>
+<p class="small">TEST MODE — no real money moved.</p>
+<a class="btn" href="/home?phone=${encodeURIComponent(u.phone)}">Return Home</a>
 </div></main>`));
+});
+
+/* UPGRADE */
+
+app.get("/upgrade", async (req, res) => {
+  const u = await findUser(req.query.phone);
+  const p = plans[req.query.plan];
+
+  if (!u || !p) return res.status(400).send("Invalid upgrade.");
+
+  u.plan = req.query.plan;
+
+  if (supabase)
+    await supabase.from("members")
+      .update({ plan: u.plan })
+      .eq("id", u.id);
+
+  log("UPGRADE", { phone: u.phone, plan: u.plan });
+
+  res.redirect(`/home?phone=${encodeURIComponent(u.phone)}`);
+});
+
+/* COUPON */
+
+app.post("/coupon", async (req, res) => {
+  const u = await findUser(req.body.phone);
+  const c = mem.coupons.get((req.body.code || "").toUpperCase());
+
+  if (!u || !c || !c.active)
+    return res.send("Invalid or inactive coupon.");
+
+  res.send(page("Coupon", `
+<header><h1>🎟️ JR PHEEF</h1></header>
+<main><div class="card">
+<h2>✅ Coupon accepted</h2>
+<p>Discount: ${c.discount}%</p>
+<a class="btn" href="/home?phone=${encodeURIComponent(u.phone)}">Continue</a>
+</div></main>`));
+});
+
+/* DELIVERY */
+
+app.get("/delivery", async (req, res) => {
+  const u = await findUser(req.query.phone);
+  if (!u) return res.redirect("/");
+
+  res.send(page("JR PHEEF Delivery", `
+<header><h1>🚚 JR PHEEF DELIVERY</h1></header>
+<main><div class="card">
+<form method="POST" action="/delivery">
+<input type="hidden" name="phone" value="${esc(u.phone)}">
+<input name="item" placeholder="What needs moving?" required>
+<input name="pickup" placeholder="Pickup location" required>
+<input name="destination" placeholder="Destination" required>
+<select name="transport">
+<option>Rider</option>
+<option>Motorbike</option>
+<option>Car</option>
+<option>Van</option>
+<option>Truck</option>
+<option>Other</option>
+</select>
+<button>Request delivery</button>
+</form>
+</div></main>`));
+});
+
+app.post("/delivery", async (req, res) => {
+  const u = await findUser(req.body.phone);
+  if (!u) return res.status(401).send("Sign in first.");
+
+  const d = {
+    id: id("DEL"),
+    member_id: u.id,
+    item: req.body.item,
+    pickup: req.body.pickup,
+    destination: req.body.destination,
+    transport: req.body.transport,
+    status: "requested",
+    created_at: new Date().toISOString()
+  };
+
+  mem.deliveries.set(d.id, d);
+  await db("jr_delivery", "insert", d);
+  log("DELIVERY_REQUEST", { delivery: d.id });
+
+  res.send(`<h2>🚚 Delivery requested</h2>
+<p>JR PHEEF will match the request with an available transport provider.</p>
+<a href="/home?phone=${encodeURIComponent(u.phone)}">Home</a>`);
 });
 
 /* WHATSAPP */
 
 app.post("/api/webhook/whatsapp", async (req, res) => {
-  const from = clean(req.body.From);
-  const msg = String(req.body.Body || "").trim();
+  const from = req.body.From || "";
+  const msg = (req.body.Body || "").trim();
   const text = msg.toLowerCase();
-  const u = await getUser(from);
+  const u = await findUser(from);
 
   let reply;
 
@@ -340,18 +597,47 @@ app.post("/api/webhook/whatsapp", async (req, res) => {
 
 Find. Match. Trade.
 
-First create your JR PHEEF account:
-
+Create your account first:
 ${BASE}
 
-Then you can BUY, SELL, MATCH and use Deal Rooms.
+Then you can BUY, SELL, FIND, MATCH, use Deal Rooms and request DELIVERY.`;
+  } else if (text === "buy") {
+    reply = `🛒 Sawa ${u.name}!
 
-Type HELP anytime.`;
+Tell me what you're looking for, your budget and location.`;
+  } else if (text === "sell") {
+    reply = `🏪 Sawa!
+
+Tell me what you're selling, price and location.
+
+You can add your listing here:
+${BASE}/list?phone=${encodeURIComponent(u.phone)}`;
+  } else if (text === "deal") {
+    reply = `🤝 Your JR PHEEF Deal Room:
+
+${BASE}/deal?phone=${encodeURIComponent(u.phone)}
+
+Your ${u.plan.toUpperCase()} match fee is KSh ${plans[u.plan]?.match || 30}.`;
+  } else if (text === "delivery") {
+    reply = `🚚 JR PHEEF DELIVERY
+
+Tell me:
+1. What is being moved?
+2. Pickup
+3. Destination
+4. Preferred transport`;
+  } else if (text === "rewards") {
+    reply = `🎁 Your JR PHEEF rewards:
+
+Rewards: KSh ${u.rewards || 0}
+Credits: KSh ${u.credits || 0}
+Referrals: ${u.referrals || 0}
+
+Minimum individual withdrawal: KSh 200.`;
   } else if (["hi","hello","hey","help"].includes(text)) {
-    reply = `👋 Karibu ${u.full_name}!
+    reply = `👋 Karibu ${u.name}!
 
-JR PHEEF iko ready:
-
+JR PHEEF:
 🛒 BUY
 🏪 SELL
 🔎 FIND
@@ -361,126 +647,102 @@ JR PHEEF iko ready:
 🎁 REWARDS
 ⭐ UPGRADE
 
-Your home:
+Open your JR PHEEF:
 ${BASE}/home?phone=${encodeURIComponent(u.phone)}`;
-  } else if (text === "buy") {
-    reply = `🛒 BUY
-
-Tell me what you're looking for, your budget and location.
-
-JR PHEEF itafute match yako.`;
-  } else if (text === "sell") {
-    reply = `🏪 SELL
-
-Tell me what you're selling, price and location.
-
-Unaweza kuongeza photos kupitia JR PHEEF.`;
-  } else if (text === "deal") {
-    reply = `🤝 DEAL ROOM
-
-Your ${String(u.plan).toUpperCase()} match fee is KSh ${(plans[u.plan] || plans.free).match}.
-
-Open:
-${BASE}/deal?phone=${encodeURIComponent(u.phone)}
-
-TEST MODE only.`;
-  } else if (text === "delivery") {
-    reply = `🚚 JR PHEEF DELIVERY
-
-Tell me:
-• What needs moving
-• Pickup
-• Destination
-• Preferred transport`;
-  } else if (text === "rewards") {
-    reply = `🎁 REWARDS
-
-Rewards: KSh ${u.rewards || 0}
-JR PHEEF Credits: ${u.credits || 0}
-Referrals: ${u.referrals || 0}
-
-Minimum withdrawal: KSh 200.`;
   } else {
-    reply = `🤝 Nimekupata!
+    reply = `🤝 JR PHEEF imekupata!
 
-JR PHEEF handles legal products, services, jobs, opportunities and transport.
-
-Type BUY, SELL, DEAL, DELIVERY, REWARDS or HELP.`;
+Tell me what you need or type:
+BUY
+SELL
+DEAL
+DELIVERY
+REWARDS
+HELP`;
   }
 
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(reply);
-  res.type("text/xml").send(twiml.toString());
 
-  log("WhatsApp", { from, message: msg });
+  log("WHATSAPP", { from, message: msg });
+
+  res.type("text/xml").send(twiml.toString());
 });
 
 /* OWNER COMMAND CENTER */
 
-app.get("/owner", async (req, res) => {
+app.get("/owner", (req, res) => {
   if (!process.env.OWNER_KEY || req.query.key !== process.env.OWNER_KEY)
     return res.status(403).send("🔒 Owner access denied.");
 
-  let members = [];
+  const revenue = [...mem.transactions.values()]
+    .filter(x => x.status === "SUCCESS")
+    .reduce((a, x) => a + Number(x.amount || 0), 0);
 
-  if (db) {
-    const { data } = await db
-      .from("members")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    members = data || [];
-  }
-
-  const revenue = [...payments.values()]
-    .filter(p => p.status === "SUCCESS")
-    .reduce((n, p) => n + p.amount, 0);
-
-  res.send(page("JR PHEEF Owner", `
+  res.send(page("JR PHEEF Command Center", `
 <header>
 <h1>👑 JR PHEEF</h1>
-<p>OWNER COMMAND CENTER</p>
+<p>COMMAND CENTER</p>
 </header>
-
 <main>
 
 <div class="grid">
-<div class="card"><h3>👥 Members</h3><div class="stat">${members.length}</div></div>
-<div class="card"><h3>🤝 Deals</h3><div class="stat">${deals.size}</div></div>
-<div class="card"><h3>💳 Payments</h3><div class="stat">${payments.size}</div></div>
-<div class="card"><h3>💰 Test Revenue</h3><div class="stat">KSh ${revenue}</div></div>
+<div class="card"><h3>👥 Members</h3><div class="stat">${mem.users.size}</div></div>
+<div class="card"><h3>🏪 Listings</h3><div class="stat">${mem.listings.size}</div></div>
+<div class="card"><h3>🤝 Deals</h3><div class="stat">${mem.deals.size}</div></div>
+<div class="card"><h3>💳 Transactions</h3><div class="stat">${mem.transactions.size}</div></div>
+<div class="card"><h3>🚚 Deliveries</h3><div class="stat">${mem.deliveries.size}</div></div>
+<div class="card"><h3>💰 TEST REVENUE</h3><div class="stat">KSh ${revenue}</div></div>
 </div>
 
 <div class="card">
-<h2>📊 JR PHEEF</h2>
-<p>🛒 Marketplace: ACTIVE</p>
-<p>🤝 Matching: ACTIVE</p>
-<p>💬 Deal Rooms: ACTIVE</p>
-<p>🎁 Rewards: ACTIVE</p>
-<p>👥 Referrals: ACTIVE</p>
-<p>🎟️ Coupons: READY</p>
-<p>🚚 Delivery: READY</p>
-<p>⭐ PRO / PRIME: ACTIVE</p>
-<p>💳 M-Pesa: NOT CONNECTED</p>
-<p>🌍 International payments: NOT CONNECTED</p>
+<h2>⚙️ JR PHEEF Systems</h2>
+<p>🟢 Accounts</p>
+<p>🟢 Buyer/Seller unified system</p>
+<p>🟢 Listings</p>
+<p>🟢 Matching</p>
+<p>🟢 Deal Rooms</p>
+<p>🟢 WhatsApp</p>
+<p>🟢 Rewards / Credits</p>
+<p>🟢 Referrals</p>
+<p>🟢 Coupons</p>
+<p>🟢 PRO / PRIME</p>
+<p>🟢 Delivery requests</p>
+<p>🟡 M-Pesa — waiting for API</p>
+<p>🟡 International payments — waiting for provider</p>
 </div>
 
 <div class="card">
-<h2>👥 MEMBERS</h2>
-${members.map(u => `
-<p><b>${u.full_name}</b> — ${String(u.plan || "free").toUpperCase()}
-<br>${u.phone}
-<br>Status: ${u.status || "unknown"} | Verified: ${u.verified ? "YES" : "NO"}</p>
-`).join("") || "<p>No members yet.</p>"}
+<h2>👥 Members</h2>
+${[...mem.users.values()].map(u => `
+<p>
+<b>${esc(u.full_name || u.name)}</b>
+— ${esc(u.plan || "free").toUpperCase()}
+<br>${esc(u.phone)}
+<br><span class="small">${esc(u.account_type || "individual")}</span>
+</p>`).join("") || "<p>No members yet.</p>"}
 </div>
 
 <div class="card">
-<h2>🔔 ACTIVITY</h2>
-${activity.map(a => `
-<p>• <b>${a.type}</b>
-<br><span class="small">${a.time}</span></p>
+<h2>🏪 Listings</h2>
+${[...mem.listings.values()].map(x => `
+<p><b>${esc(x.title)}</b> — KSh ${x.price} — ${esc(x.location)}</p>
+`).join("") || "<p>No listings yet.</p>"}
+</div>
+
+<div class="card">
+<h2>🤝 Deal Rooms</h2>
+${[...mem.deals.values()].map(d => `
+<p><b>${d.id}</b> — ${d.status}</p>
+`).join("") || "<p>No deals yet.</p>"}
+</div>
+
+<div class="card">
+<h2>🔔 Activity</h2>
+${mem.activity.map(a => `
+<p>• <b>${esc(a.type)}</b>
+<br><span class="small">${esc(a.time)}</span></p>
 `).join("") || "<p>No activity yet.</p>"}
-
 </div>
 
 </main>`));
@@ -488,25 +750,31 @@ ${activity.map(a => `
 
 /* HEALTH */
 
-app.get("/health", (_, res) => res.json({
+app.get("/health", (req, res) => res.json({
   ok: true,
   service: "JR PHEEF",
-  database: !!db,
+  supabase: !!supabase,
   mode: "TEST",
-  deals: deals.size,
-  payments: payments.size
+  users: mem.users.size,
+  listings: mem.listings.size,
+  deals: mem.deals.size,
+  transactions: mem.transactions.size,
+  deliveries: mem.deliveries.size
 }));
 
 app.listen(PORT, () => {
   console.log(`🚀 JR PHEEF running on ${PORT}`);
-  console.log(`🗄️ Supabase: ${db ? "CONNECTED" : "NOT CONNECTED"}`);
-  console.log("🔐 Persistent accounts: ACTIVE");
-  console.log("🏠 Unified home: ACTIVE");
+  console.log(`🗄️ Supabase: ${supabase ? "CONNECTED" : "NOT CONNECTED"}`);
+  console.log("👤 Accounts/Login: ACTIVE");
+  console.log("🏠 Unified Buyer/Seller Home: ACTIVE");
+  console.log("🏪 Marketplace Listings: ACTIVE");
+  console.log("🔎 Search/Matching: ACTIVE");
   console.log("🤝 Deal Rooms: ACTIVE");
   console.log("💬 WhatsApp: ACTIVE");
-  console.log("👑 Owner Center: ACTIVE");
-  console.log("🎁 Rewards/Referrals: ACTIVE");
+  console.log("🎁 Rewards/Referrals/Coupons: ACTIVE");
   console.log("⭐ PRO/PRIME: ACTIVE");
-  console.log("🚚 Delivery: READY");
-  console.log("💳 M-Pesa: NOT CONNECTED");
-});
+  console.log("🚚 Delivery: ACTIVE");
+  console.log("👑 Owner Command Center: ACTIVE");
+  console.log("💳 Payments: TEST MODE");
+  console.log("📱 M-Pesa: NOT CONNECTED");
+}); 
