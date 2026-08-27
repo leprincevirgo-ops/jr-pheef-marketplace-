@@ -3,602 +3,264 @@ const { createClient } = require("@supabase/supabase-js");
 const twilio = require("twilio");
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
+const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY)
+  : null;
 
-const db = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+const twilioClient =
+  process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+    ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+    : null;
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+const users = new Map();
+const deals = new Map();
+const payments = new Map();
 
-const FROM = process.env.TWILIO_WHATSAPP_NUMBER;
-
-/* =========================
-   JR PHEEF CORE SETTINGS
-========================= */
-
-const PLANS = {
-  FREE:  { price: 0,   match: 30, photos: 5 },
-  PRO:   { price: 99,  match: 20, photos: 10 },
-  PRIME: { price: 149, match: 20, photos: 20 }
+const plans = {
+  free: { price: 0, matchFee: 30 },
+  pro: { price: 99, matchFee: 20 },
+  prime: { price: 149, matchFee: 20 }
 };
 
-const REWARD = {
-  withdrawable: .50,
-  credits: .30,
-  revenue: .20
-};
-
-const MIN_WITHDRAWAL = {
-  INDIVIDUAL: 200,
-  BUSINESS: 1000
-};
-
-const clean = v => String(v || "")
-  .replace(/^whatsapp:/i, "")
-  .trim();
-
-const money = n =>
-  Number(n || 0).toLocaleString("en-KE");
-
-const reply = text =>
-  `<Response><Message>${String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")}</Message></Response>`;
-
-/* =========================
-   LANGUAGE / STYLE
-========================= */
-
-function language(text) {
-  const t = text.toLowerCase();
-
-  if (/\b(natafuta|nauza|bei|pesa|sawa|tafuta|hii|hii ni|uko|wapi|mtu|mteja|huduma)\b/.test(t))
-    return "sw";
-
-  if (/\b(niko|bro|maze|manze|uko aje|si poa|imeweza|dem|rada|sai|kuomoka|msee|form|buda|chali)\b/.test(t))
-    return "sheng";
-
-  return "en";
+function id(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-const say = {
-  en: {
-    welcome: "👋 Welcome to JR PHEEF.\n\nFind, match and trade legal opportunities — goods, services, jobs, transport, business and more.\n\nTell me naturally what you need or what you have.",
-    noMatch: "🔎 I haven't found a suitable match yet. I'll keep looking.",
-    room: "🔐 Deal Room opened.\n\nTalk normally. No AGREE, DONE or PAID commands are required.",
-    sent: "☑️ Sent.",
-    listing: "📣 Send your opportunity like this:\n\nOPPORTUNITY\nItem/service\nPrice\nLocation\n\nThen send your photos together.",
-    noRoom: "🔐 You don't have an active Deal Room yet."
-  },
-
-  sw: {
-    welcome: "👋 Karibu JR PHEEF.\n\nTafuta, pata match na fanya biashara ya opportunities halali — bidhaa, huduma, kazi, transport, biashara na zaidi.\n\nNiambie tu unachotafuta au ulicho nacho.",
-    noMatch: "🔎 Bado sijapata match inayofaa. Nitaendelea kutafuta.",
-    room: "🔐 Deal Room imefunguliwa.\n\nOngea kawaida. Hakuna haja ya kuandika AGREE, DONE au PAID.",
-    sent: "☑️ Imetumwa.",
-    listing: "📣 Tuma opportunity yako hivi:\n\nOPPORTUNITY\nBidhaa/huduma\nBei\nLocation\n\nHalafu tuma picha zote pamoja.",
-    noRoom: "🔐 Huna Deal Room active kwa sasa."
-  },
-
-  sheng: {
-    welcome: "👋 Karibu JR PHEEF.\n\nTuko hapa kukumatch na opportunities za biashara legit — goods, services, jobs, transport na zingine.\n\nNiambie tu unatafuta nini ama uko na nini.",
-    noMatch: "🔎 Bado sijapata match fiti. Nitaendelea kusaka.",
-    room: "🔐 Deal Room imefunguka.\n\nOngea kawaida tu. Hakuna haja ya AGREE, DONE ama PAID.",
-    sent: "☑️ Imetumwa.",
-    listing: "📣 Tuma opportunity yako hivi:\n\nOPPORTUNITY\nItem/service\nPrice\nLocation\n\nHalafu tuma picha zote pamoja.",
-    noRoom: "🔐 Bado huna Deal Room active."
-  }
-};
-
-/* =========================
-   USER
-========================= */
-
-async function getUser(phone) {
-  const { data } = await db
-    .from("users")
-    .select("*")
-    .eq("phone", phone)
-    .maybeSingle();
-
-  return data;
+function home(req, res) {
+  res.send(`
+  <html><head><title>JR PHEEF</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+  body{font-family:Arial;margin:0;background:#f4f8f5;text-align:center}
+  header{background:#073b20;color:white;padding:28px}
+  .box{max-width:500px;margin:35px auto;background:white;padding:30px;border-radius:18px;box-shadow:0 3px 15px #ccc}
+  button{padding:13px 22px;margin:7px;border:0;border-radius:10px;background:#168a45;color:white}
+  input{padding:13px;width:85%;margin:7px;border:1px solid #ccc;border-radius:8px}
+  </style></head>
+  <body>
+  <header><h1>JR PHEEF</h1><p>Find. Match. Trade.</p></header>
+  <div class="box">
+    <h2>Welcome to JR PHEEF 👋</h2>
+    <p>Buy, sell, find services, opportunities and delivery.</p>
+    <form method="POST" action="/signup">
+      <input name="name" placeholder="Real name" required><br>
+      <input name="year" type="number" placeholder="Birth year" required><br>
+      <input name="phone" placeholder="Phone number" required><br>
+      <button>Create Account</button>
+    </form>
+    <p>Already registered?</p>
+    <form method="GET" action="/dashboard">
+      <input name="phone" placeholder="Phone number" required><br>
+      <button>Sign In</button>
+    </form>
+  </div></body></html>`);
 }
 
-async function ensureUser(phone) {
-  let u = await getUser(phone);
-  if (u) return u;
+app.get("/", home);
 
-  const { data } = await db
-    .from("users")
-    .insert({
-      phone,
-      plan: "FREE",
-      identity_status: "UNVERIFIED",
-      reward_balance: 0,
-      withdrawable_balance: 0,
-      credit_balance: 0,
-      reward_revenue: 0
-    })
-    .select()
-    .single();
-
-  return data;
-}
-
-/* =========================
-   OPPORTUNITIES
-========================= */
-
-async function createListing(text, phone, lang) {
-  const l = text.split("\n").map(x => x.trim()).filter(Boolean);
-
-  if (l.length < 4)
-    return say[lang].listing;
-
-  const u = await ensureUser(phone);
-  const plan = PLANS[String(u.plan || "FREE").toUpperCase()];
-
-  const price = Number(
-    String(l[2]).replace(/[^0-9.]/g, "")
-  ) || 0;
-
-  const { data, error } = await db
-    .from("listings")
-    .insert({
-      phone,
-      item_name: l[1],
-      price,
-      location: l[3],
-      photos: [],
-      status: "ACTIVE",
-      plan: u.plan || "FREE"
-    })
-    .select()
-    .single();
-
-  if (error) {
-    console.error(error);
-    return "❌ Could not create the opportunity.";
-  }
-
-  return lang === "sheng"
-    ? `✅ Opportunity iko live.\n\n${data.item_name}\n💰 KSh ${money(data.price)}\n📍 ${data.location}\n\n📸 Unaweza tuma hadi ${plan.photos} picha.`
-    : lang === "sw"
-    ? `✅ Opportunity yako iko live.\n\n${data.item_name}\n💰 KSh ${money(data.price)}\n📍 ${data.location}\n\n📸 Unaweza kutuma hadi picha ${plan.photos}.`
-    : `✅ Opportunity is live.\n\n${data.item_name}\n💰 KSh ${money(data.price)}\n📍 ${data.location}\n\n📸 You can send up to ${plan.photos} photos.`;
-}
-
-/* =========================
-   MATCHING
-========================= */
-
-async function findMatch(text, buyer) {
-  const q = text
-    .replace(/^(looking for|i need|find me|natafuta|natafut)\s*/i, "")
-    .trim();
-
-  if (!q) return null;
-
-  const { data } = await db
-    .from("listings")
-    .select("*")
-    .eq("status", "ACTIVE")
-    .ilike("item_name", `%${q}%`)
-    .limit(20);
-
-  return (data || []).find(
-    x => clean(x.phone) !== clean(buyer)
-  );
-}
-
-/* =========================
-   DEAL ROOM
-========================= */
-
-async function createRoom(listing, buyer) {
-  if (clean(listing.phone) === clean(buyer))
-    return null;
-
-  const { data: existing } = await db
-    .from("deal_rooms")
-    .select("*")
-    .eq("listing_id", listing.id)
-    .eq("buyer_phone", buyer)
-    .in("status", ["negotiating", "agreed", "paid"])
-    .limit(1);
-
-  if (existing?.[0]) return existing[0];
-
-  const { data } = await db
-    .from("deal_rooms")
-    .insert({
-      listing_id: listing.id,
-      buyer_phone: buyer,
-      seller_phone: listing.phone,
-      status: "negotiating",
-      buyer_paid: false,
-      seller_paid: false
-    })
-    .select()
-    .single();
-
-  return data;
-}
-
-async function notifySeller(listing, lang) {
-  const s = say[lang] || say.en;
-
-  await twilioClient.messages.create({
-    from: FROM,
-    to: `whatsapp:${clean(listing.phone)}`,
-    body: `🎉 JR PHEEF found a match.\n\n${listing.item_name}\n💰 KSh ${money(listing.price)}\n📍 ${listing.location}\n\n🔐 ${s.room}\n\nReply CHAT.`
-  });
-}
-
-/* =========================
-   REWARDS
-========================= */
-
-function rewardSplit(amount) {
-  amount = Number(amount || 0);
-
-  return {
-    withdrawable: +(amount * REWARD.withdrawable).toFixed(2),
-    credits: +(amount * REWARD.credits).toFixed(2),
-    revenue: +(amount * REWARD.revenue).toFixed(2)
+app.post("/signup", async (req, res) => {
+  const { name, year, phone } = req.body;
+  const user = {
+    id: id("USR"),
+    name,
+    birthYear: year,
+    phone,
+    plan: "free",
+    credits: 0,
+    rewards: 0,
+    referrals: 0,
+    createdAt: new Date().toISOString()
   };
-}
 
-/* =========================
-   DASHBOARD
-========================= */
+  users.set(phone, user);
 
-async function dashboard(phone, lang) {
-  const u = await ensureUser(phone);
-  const plan = PLANS[String(u.plan || "FREE").toUpperCase()];
-
-  const { count: listings } = await db
-    .from("listings")
-    .select("*", { count: "exact", head: true })
-    .eq("phone", phone)
-    .eq("status", "ACTIVE");
-
-  const { count: rooms } = await db
-    .from("deal_rooms")
-    .select("*", { count: "exact", head: true })
-    .or(`buyer_phone.eq.${phone},seller_phone.eq.${phone}`);
-
-  const business =
-    ["BUSINESS", "INSTITUTION"].includes(
-      String(u.account_type || "").toUpperCase()
-    );
-
-  const min = business
-    ? MIN_WITHDRAWAL.BUSINESS
-    : MIN_WITHDRAWAL.INDIVIDUAL;
-
-  return `👤 JR PHEEF
-
-Plan: ${u.plan || "FREE"}
-💳 Match fee: KSh ${plan.match}
-📦 Listings: ${listings || 0}
-🔐 Deal Rooms: ${rooms || 0}
-
-🎁 Rewards: KSh ${money(u.reward_balance)}
-💸 Withdrawable: KSh ${money(u.withdrawable_balance)}
-🪙 JR PHEEF Credits: KSh ${money(u.credit_balance)}
-
-🔐 Identity: ${u.identity_status || "UNVERIFIED"}
-
-Minimum withdrawal: KSh ${min}`;
-}
-
-/* =========================
-   WHATSAPP
-========================= */
-
-app.post("/api/webhook/whatsapp", async (req, res) => {
-  try {
-    const phone = clean(req.body.From);
-    const text = String(req.body.Body || "").trim();
-    const upper = text.toUpperCase();
-    const media = Number(req.body.NumMedia || 0);
-
-    const u = await ensureUser(phone);
-    const lang = language(text);
-    const s = say[lang];
-
-    /* Photos */
-
-    if (media > 0) {
-      const max = PLANS[String(u.plan || "FREE").toUpperCase()].photos;
-
-      const { data } = await db
-        .from("listings")
-        .select("*")
-        .eq("phone", phone)
-        .eq("status", "ACTIVE")
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      const listing = data?.[0];
-
-      if (!listing)
-        return res.type("text/xml").send(
-          reply(s.listing)
-        );
-
-      const photos = Array.isArray(listing.photos)
-        ? [...listing.photos]
-        : [];
-
-      for (let i = 0; i < media && photos.length < max; i++) {
-        const url = req.body[`MediaUrl${i}`];
-        if (url) photos.push(url);
-      }
-
-      await db
-        .from("listings")
-        .update({ photos })
-        .eq("id", listing.id);
-
-      return res.type("text/xml").send(
-        reply(`📸 ${photos.length}/${max} photos saved.`)
-      );
-    }
-
-    /* Welcome */
-
-    if (/^(HI|HELLO|HEY|START|MENU)$/i.test(text))
-      return res.type("text/xml").send(
-        reply(s.welcome)
-      );
-
-    /* Dashboard */
-
-    if (/^(DASHBOARD|ACCOUNT)$/i.test(text))
-      return res.type("text/xml").send(
-        reply(await dashboard(phone, lang))
-      );
-
-    /* Listing */
-
-    if (upper.startsWith("OPPORTUNITY"))
-      return res.type("text/xml").send(
-        reply(await createListing(text, phone, lang))
-      );
-
-    /* Seller request */
-
-    if (/^(nauza|ninauza|selling|i have|i'm selling)/i.test(text))
-      return res.type("text/xml").send(
-        reply(s.listing)
-      );
-
-    /* Buyer request */
-
-    if (/^(looking for|i need|find me|natafuta|natafut)/i.test(text)) {
-      const listing = await findMatch(text, phone);
-
-      if (!listing)
-        return res.type("text/xml").send(
-          reply(s.noMatch)
-        );
-
-      const room = await createRoom(listing, phone);
-
-      if (!room)
-        return res.type("text/xml").send(
-          reply("❌ Could not create Deal Room.")
-        );
-
-      await notifySeller(listing, lang);
-
-      return res.type("text/xml").send(
-        reply(
-          `🎉 JR PHEEF found a match.\n\n${listing.item_name}\n💰 KSh ${money(listing.price)}\n📍 ${listing.location}\n\n${s.room}\n\nReply CHAT.`
-        )
-      );
-    }
-
-    /* Deal Room */
-
-    const { data: rooms } = await db
-      .from("deal_rooms")
-      .select("*")
-      .or(`buyer_phone.eq.${phone},seller_phone.eq.${phone}`)
-      .in("status", ["negotiating", "agreed", "paid"])
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    const room = rooms?.[0];
-
-    if (room) {
-      if (upper === "CHAT")
-        return res.type("text/xml").send(
-          reply(s.room)
-        );
-
-      const other =
-        clean(room.buyer_phone) === phone
-          ? room.seller_phone
-          : room.buyer_phone;
-
-      await db.from("messages").insert({
-        room_id: room.id,
-        sender_phone: phone,
-        message: text
-      });
-
-      await twilioClient.messages.create({
-        from: FROM,
-        to: `whatsapp:${clean(other)}`,
-        body: text
-      });
-
-      return res.type("text/xml").send(
-        reply(s.sent)
-      );
-    }
-
-    return res.type("text/xml").send(
-      reply(s.welcome)
-    );
-
-  } catch (e) {
-    console.error("JR PHEEF ERROR:", e);
-
-    return res.type("text/xml").send(
-      reply("❌ JR PHEEF is temporarily unavailable. Please try again.")
-    );
+  if (supabase) {
+    await supabase.from("users").insert({
+      name, birth_year: year, phone, plan: "free"
+    }).catch(() => {});
   }
+
+  res.redirect(`/dashboard?phone=${encodeURIComponent(phone)}`);
 });
 
-/* =========================
-   OWNER DASHBOARD
-========================= */
+app.get("/dashboard", (req, res) => {
+  const user = users.get(req.query.phone);
 
-function ownerAuth(req, res, next) {
-  const h = req.headers.authorization || "";
-
-  if (!h.startsWith("Basic "))
-    return res
-      .set("WWW-Authenticate", 'Basic realm="JR PHEEF OWNER"')
-      .status(401)
-      .send("Owner login required");
-
-  const [u, p] = Buffer.from(h.slice(6), "base64")
-    .toString()
-    .split(":");
-
-  if (
-    u !== process.env.JR_PHEEF_ADMIN_USER ||
-    p !== process.env.JR_PHEEF_ADMIN_PASSWORD
-  )
-    return res.status(403).send("Access denied");
-
-  next();
-}
-
-app.get("/owner", ownerAuth, async (req, res) => {
-  const [users, listings, rooms, messages] = await Promise.all([
-    db.from("users").select("*"),
-    db.from("listings").select("*"),
-    db.from("deal_rooms").select("*"),
-    db.from("messages").select("*")
-  ]);
-
-  const U = users.data || [];
-  const L = listings.data || [];
-  const R = rooms.data || [];
-  const M = messages.data || [];
-
-  const revenue = U.reduce(
-    (n, x) => n + Number(x.reward_revenue || 0),
-    0
-  );
+  if (!user)
+    return res.status(401).send("Account not found. Please create an account first.");
 
   res.send(`
-<!doctype html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width">
-<title>JR PHEEF OWNER</title>
-<style>
-body{font-family:Arial;margin:20px;background:#f4f4f4}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:15px}
-.card{background:#fff;padding:20px;border-radius:15px}
-.n{font-size:28px;font-weight:bold}
-</style>
-</head>
-<body>
+  <html><head><title>JR PHEEF Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+  body{font-family:Arial;background:#f4f8f5;margin:0}
+  .top{background:#073b20;color:white;padding:22px}
+  .card{background:white;margin:15px;padding:20px;border-radius:15px}
+  button{padding:12px;border:0;border-radius:9px;background:#168a45;color:white}
+  </style></head>
+  <body>
+  <div class="top"><h2>JR PHEEF Dashboard</h2>
+  Welcome, ${user.name} 👋<br>Plan: <b>${user.plan.toUpperCase()}</b></div>
 
-<h1>JR PHEEF OWNER</h1>
+  <div class="card">
+    <h3>🛒 Buy</h3>
+    Find products, services and opportunities.
+  </div>
 
-<div class="grid">
+  <div class="card">
+    <h3>🏪 Sell</h3>
+    List your products and services.
+  </div>
 
-<div class="card">
-Users<div class="n">${U.length}</div>
-</div>
+  <div class="card">
+    <h3>🤝 Deal Rooms</h3>
+    Agree, chat and pay securely.
+    <p><a href="/deal?phone=${encodeURIComponent(user.phone)}">
+    <button>Open Test Deal</button></a></p>
+  </div>
 
-<div class="card">
-Opportunities<div class="n">${L.length}</div>
-</div>
+  <div class="card">
+    <h3>🎁 Rewards</h3>
+    Rewards: KSh ${user.rewards}<br>
+    JR PHEEF Credits: ${user.credits}
+  </div>
 
-<div class="card">
-Deal Rooms<div class="n">${R.length}</div>
-</div>
-
-<div class="card">
-Messages<div class="n">${M.length}</div>
-</div>
-
-<div class="card">
-Reward Revenue<div class="n">KSh ${money(revenue)}</div>
-</div>
-
-</div>
-
-<h2>JR PHEEF Core</h2>
-
-<div class="card">
-🟢 Opportunities<br>
-🟢 Matching<br>
-🟢 Natural Chat<br>
-🟢 Language matching<br>
-🟢 English / Kiswahili / Sheng<br>
-🟢 Photos<br>
-🟢 Deal Rooms<br>
-🟢 Buyer + Seller account<br>
-🟢 Rewards 50/30/20<br>
-🟢 Owner authentication<br>
-🟡 M-Pesa: NOT CONNECTED<br>
-🟡 International payments: NOT CONNECTED<br>
-🟡 Delivery engine: NEXT PHASE
-</div>
-
-</body>
-</html>
-`);
+  <div class="card">
+    <h3>⭐ Upgrade</h3>
+    <p>PRO — KSh 99/month</p>
+    <p>PRIME — KSh 149/month</p>
+    <a href="/upgrade?phone=${encodeURIComponent(user.phone)}&plan=pro">
+    <button>Test PRO</button></a>
+    <a href="/upgrade?phone=${encodeURIComponent(user.phone)}&plan=prime">
+    <button>Test PRIME</button></a>
+  </div>
+  </body></html>`);
 });
 
-/* =========================
-   HEALTH
-========================= */
+app.get("/deal", (req, res) => {
+  const phone = req.query.phone;
+  const user = users.get(phone);
 
-app.get("/", (req, res) => {
+  if (!user) return res.status(401).send("Please sign in first.");
+
+  const deal = {
+    id: id("DEAL"),
+    buyer: user.phone,
+    seller: "TEST-SELLER",
+    amount: 30,
+    status: "awaiting_payment"
+  };
+
+  deals.set(deal.id, deal);
+
+  res.send(`
+  <html><body style="font-family:Arial;text-align:center;padding:30px">
+  <h1>🤝 JR PHEEF Deal Room</h1>
+  <p>Buyer: ${user.name}</p>
+  <p>Match fee: <b>KSh 30</b></p>
+  <p>TEST MODE — no real money will move.</p>
+  <form method="POST" action="/pay">
+    <input type="hidden" name="deal" value="${deal.id}">
+    <button style="padding:15px 30px;background:#168a45;color:white;border:0;border-radius:10px">
+    💳 Pay KSh 30
+    </button>
+  </form>
+  </body></html>`);
+});
+
+app.post("/pay", (req, res) => {
+  const deal = deals.get(req.body.deal);
+  if (!deal) return res.status(404).send("Deal not found.");
+
+  const payment = {
+    id: id("PAY"),
+    deal: deal.id,
+    amount: deal.amount,
+    status: "SUCCESS",
+    mode: "TEST",
+    createdAt: new Date().toISOString()
+  };
+
+  payments.set(payment.id, payment);
+  deal.status = "paid";
+
+  res.send(`
+  <html><body style="font-family:Arial;text-align:center;padding:40px">
+  <div style="font-size:70px">✅</div>
+  <h1>Payment Successful</h1>
+  <h2>KSh ${payment.amount}</h2>
+  <p>JR PHEEF Deal Room payment confirmed.</p>
+  <p><b>Transaction:</b> ${payment.id}</p>
+  <p>TEST MODE — no real M-Pesa transaction was made.</p>
+  <a href="/"><button style="padding:14px 25px">Done</button></a>
+  </body></html>`);
+});
+
+app.get("/upgrade", (req, res) => {
+  const user = users.get(req.query.phone);
+  const plan = plans[req.query.plan];
+
+  if (!user || !plan) return res.status(400).send("Invalid upgrade.");
+
+  user.plan = req.query.plan;
+  user.matchFee = plan.matchFee;
+
+  res.send(`
+  <html><body style="font-family:Arial;text-align:center;padding:40px">
+  <h1>⭐ JR PHEEF ${req.query.plan.toUpperCase()}</h1>
+  <h2>TEST UPGRADE COMPLETE</h2>
+  <p>Monthly price: KSh ${plan.price}</p>
+  <p>Your match fee is now KSh ${plan.matchFee}</p>
+  <a href="/dashboard?phone=${encodeURIComponent(user.phone)}">
+  <button style="padding:14px 25px">Return to Dashboard</button></a>
+  </body></html>`);
+});
+
+app.get("/owner", (req, res) => {
+  if (req.query.key !== process.env.OWNER_KEY)
+    return res.status(403).send("Access denied.");
+
   res.json({
-    service: "JR PHEEF",
-    status: "LIVE",
-    mode: "CORE TEST",
-    language: "AUTO",
-    opportunities: "ACTIVE",
-    dealRooms: "ACTIVE",
-    payments: "NOT CONNECTED",
-    delivery: "NEXT PHASE",
-    rewards: "50% withdrawable / 30% credits / 20% revenue"
+    platform: "JR PHEEF",
+    users: users.size,
+    deals: deals.size,
+    payments: payments.size,
+    plans,
+    testMode: true,
+    mpesa: "NOT CONNECTED"
   });
 });
+
+app.post("/api/webhook/whatsapp", (req, res) => {
+  const from = req.body.From || "";
+  const message = (req.body.Body || "").trim();
+
+  const reply =
+    message.toLowerCase() === "buy"
+      ? "🛒 JR PHEEF: Sawa! What are you looking for and your budget?"
+      : message.toLowerCase() === "sell"
+      ? "🏪 JR PHEEF: Sawa! Tell me what you're selling, price and location."
+      : `🤝 JR PHEEF: ${message ? "Nimekupata! Let's find the right opportunity." : "Karibu JR PHEEF! Type BUY or SELL to begin."}`;
+
+  const twiml = new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
+  res.type("text/xml").send(twiml.toString());
+});
+
+app.get("/health", (req, res) =>
+  res.json({ ok: true, service: "JR PHEEF", mode: "TEST" })
+);
 
 app.listen(PORT, () => {
   console.log(`🚀 JR PHEEF running on port ${PORT}`);
-  console.log("🌍 Automatic language matching: ACTIVE");
-  console.log("💬 Natural CHAT: ACTIVE");
-  console.log("🤝 Opportunity matching: ACTIVE");
-  console.log("🔐 Deal Rooms: ACTIVE");
-  console.log("📸 Multiple photos: ACTIVE");
-  console.log("👤 Unified buyer/seller: ACTIVE");
-  console.log("🎁 Rewards 50/30/20: ACTIVE");
-  console.log("🏢 Business accounts: READY");
-  console.log("🔒 Owner dashboard: ACTIVE");
-  console.log("💳 M-Pesa: NOT CONNECTED");
+  console.log("🛒 Marketplace: ACTIVE");
+  console.log("🤝 Deal Rooms: ACTIVE");
+  console.log("👤 Unified accounts: ACTIVE");
+  console.log("💳 TEST payments: ACTIVE");
+  console.log("💰 Real M-Pesa: NOT CONNECTED");
+  console.log("🔔 Notifications: READY");
 }); 
