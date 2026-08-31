@@ -1,7 +1,6 @@
 {
   "name": "jr-pheef-marketplace",
   "version": "3.0.0",
-  "description": "JR PHEEF - Find, Match, Connect, Trade",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -12,4 +11,4 @@
     "multer": "^2.0.2",
     "twilio": "^5.10.2"
   }
-}
+} 
