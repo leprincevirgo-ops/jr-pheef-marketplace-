@@ -1,1126 +1,430 @@
-const express = require("express");
-const crypto = require("crypto");
-const { createClient } = require("@supabase/supabase-js");
-const twilio = require("twilio");
+const express=require("express");
+const crypto=require("crypto");
+const {createClient}=require("@supabase/supabase-js");
+const twilio=require("twilio");
+const multer=require("multer");
 
-const app = express();
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-app.use(express.json({ limit: "10mb" }));
+const app=express(), PORT=process.env.PORT||10000;
+const BASE="https://jr-pheef-marketplace.onrender.com";
+const KEY=process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY||process.env.SUPABASE_ANON_KEY;
+const sb=process.env.SUPABASE_URL&&KEY?createClient(process.env.SUPABASE_URL,KEY):null;
+const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024}});
+app.use(express.urlencoded({extended:true}));
+app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
-const BASE = "https://jr-pheef-marketplace.onrender.com";
-
-const supabase =
-  process.env.SUPABASE_URL &&
-  (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_ANON_KEY)
-    ? createClient(
-        process.env.SUPABASE_URL,
-        process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_ANON_KEY
-      )
-    : null;
-
-const sessions = new Map();
-const activity = [];
-
-const plans = {
-  free: { price: 0, match: 30 },
-  pro: { price: 99, match: 20 },
-  prime: { price: 149, match: 20 }
+const plans={
+ free:{price:0,match:30},
+ pro:{price:99,match:20},
+ prime:{price:149,match:20}
 };
 
-const log = (type, data = {}) => {
-  activity.unshift({ type, ...data, time: new Date().toISOString() });
-  activity.splice(50);
+const esc=s=>String(s??"").replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[x]));
+const clean=s=>String(s??"").trim();
+const hash=p=>crypto.scryptSync(p,process.env.PASSWORD_SALT||"jr-pheef-salt",32).toString("hex");
+const block=/(\+?\d[\d\s().-]{7,}|\b\d{9,13}\b|https?:\/\/|www\.|\.com\b|\.co\.ke\b|@\w+\.\w+|\bwhatsapp\b|\btelegram\b|\bemail\b)/i;
+const member=async id=>{
+ if(!sb)return null;
+ const {data}=await sb.from("members").select("*").eq("id",id).maybeSingle();
+ return data;
+};
+const phoneMember=async phone=>{
+ if(!sb)return null;
+ const p=clean(phone);
+ const {data}=await sb.from("members").select("*").eq("phone",p).maybeSingle();
+ return data;
+};
+const nextDGBO=async()=>{
+ const {count}=await sb.from("members").select("*",{count:"exact",head:true});
+ return `DGBO-${String((count||0)+1).padStart(6,"0")}`;
+};
+const save=(table,data,id)=>{
+ let q=sb.from(table);
+ return id?q.update(data).eq("id",id):q.insert(data);
 };
 
-const uid = p => `${p}-${crypto.randomBytes(4).toString("hex")}`;
-
-const esc = s =>
-  String(s ?? "").replace(/[&<>"']/g, x =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[x])
-  );
-
-const html = (title, body) => `<!doctype html>
-<html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<style>
-:root{--c:#08783c;--bg:#f3f8f5;--card:#fff}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);
-font-family:Arial;color:#111}header{background:#063d20;color:white;padding:24px}
-main{max-width:900px;margin:auto;padding:15px}.card{background:var(--card);
-padding:18px;margin:12px 0;border-radius:18px;box-shadow:0 2px 10px #0001}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-input,textarea,select{width:100%;padding:12px;margin:5px 0;border:1px solid #ccc;border-radius:9px}
-button,.btn{background:var(--c);color:white;border:0;padding:11px 16px;
-border-radius:9px;text-decoration:none;display:inline-block;margin:4px;cursor:pointer}
-img.avatar{width:90px;height:90px;border-radius:50%;object-fit:cover}
-.small{font-size:13px;opacity:.7}.pill{padding:6px 10px;border-radius:20px;background:#e5f5ec}
-</style></head><body>${body}</body></html>`;
-
-async function findUser(phone) {
-  if (!supabase || !phone) return null;
-
-  const { data } = await supabase
-    .from("members")
-    .select("*")
-    .eq("phone", phone)
-    .maybeSingle();
-
-  return data || null;
+function layout(title,body,theme="green"){
+ const colors={green:"#08783c",blue:"#2563eb",purple:"#7c3aed",gold:"#b8860b",black:"#111"};
+ return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+ <title>${esc(title)}</title><style>
+ :root{--c:${colors[theme]||colors.green};--bg:#f3f8f5;--card:#fff;--txt:#111}
+ *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font-family:Arial,sans-serif}
+ header{background:var(--c);color:#fff;padding:25px 20px}main{max-width:850px;margin:auto;padding:14px}
+ .card{background:var(--card);border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 2px 12px #0001}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+ input,textarea,select{width:100%;padding:13px;margin:6px 0;border:1px solid #ccc;border-radius:10px;font-size:15px}
+ button,.btn{display:inline-block;background:var(--c);color:#fff;border:0;border-radius:10px;padding:12px 17px;margin:4px;text-decoration:none;cursor:pointer}
+ .danger{background:#b42318}.muted{opacity:.7;font-size:13px}.pill{display:inline-block;padding:6px 10px;border-radius:20px;background:#eee}
+ img.avatar{width:110px;height:110px;border-radius:50%;object-fit:cover;border:3px solid var(--c)}
+ </style></head><body>${body}</body></html>`;
 }
 
-async function saveUser(phone, updates) {
-  if (!supabase) return null;
+app.get("/",(req,res)=>res.send(layout("JR PHEEF",`
+<header><h1>JR PHEEF</h1><p>Find. Match. Connect. Trade.</p></header>
+<main><div class="card"><h2>Welcome 👋</h2>
+<p>One place to discover people, opportunities, businesses, services and real connections.</p>
+<a class="btn" href="/register">Create account</a>
+<a class="btn" href="/login">Sign in</a></div>
+<div class="card"><h3>JR PHEEF</h3><p>Find opportunities. Create opportunities. Connect with people.</p></div></main>`)));
 
-  const { data } = await supabase
-    .from("members")
-    .update(updates)
-    .eq("phone", phone)
-    .select()
-    .maybeSingle();
+/* REGISTRATION */
 
-  return data;
-}
-
-function sessionUser(req) {
-  const token = req.headers.cookie
-    ?.split(";")
-    .map(x => x.trim())
-    .find(x => x.startsWith("jrp_session="))
-    ?.split("=")[1];
-
-  return token ? sessions.get(token) : null;
-}
-
-function login(res, user) {
-  const token = crypto.randomBytes(32).toString("hex");
-  sessions.set(token, user.phone);
-  res.setHeader(
-    "Set-Cookie",
-    `jrp_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000`
-  );
-}
-
-function blockedMessage(text) {
-  const t = String(text || "");
-
-  const patterns = [
-    /\b(?:\+?254|0)?7\d{8}\b/,
-    /\b\d{3}[-.\s]\d{3}[-.\s]\d{3,4}\b/,
-    /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/i,
-    /\b(?:https?:\/\/|www\.)\S+/i,
-    /\b(?:instagram|facebook|telegram|whatsapp|tiktok|snapchat)\b/i
-  ];
-
-  return patterns.some(p => p.test(t));
-}
-
-async function notify(memberId, title, message, type = "system") {
-  if (!supabase || !memberId) return;
-
-  await supabase.from("jr_notifications").insert({
-    member_id: memberId,
-    title,
-    message,
-    type
-  });
-}
-
-/* HOME */
-
-app.get("/", async (req, res) => {
-  const u = sessionUser(req);
-
-  if (u) return res.redirect("/home");
-
-  res.send(html("JR PHEEF", `
-<header>
-<h1>JR PHEEF</h1>
-<p>Find. Match. Connect. Trade.</p>
-</header>
-<main>
-<div class="card">
-<h2>Karibu 👋</h2>
-<p>One place for people, opportunities, businesses, connections and trade.</p>
-
-<form method="POST" action="/signup">
+app.get("/register",(req,res)=>res.send(layout("Create Account",`
+<header><h1>Create JR PHEEF Account</h1></header><main><div class="card">
+<form method="POST" action="/register">
 <input name="name" placeholder="Full name" required>
 <input name="phone" placeholder="Phone number" required>
-<input name="city" placeholder="City / location">
-<input name="country" value="Kenya" placeholder="Country">
-<button>Create account</button>
-</form>
-</div>
+<input name="year" type="number" placeholder="Birth year" required>
+<input id="pw" name="password" type="password" placeholder="Create password" required>
+<label><input type="checkbox" onclick="pw.type=this.checked?'text':'password'"> 👁 Show password</label>
+<button>Continue</button></form></div></main>`)));
 
-<div class="card">
-<h3>Already registered?</h3>
-<form method="POST" action="/login">
-<input name="phone" placeholder="Your phone number" required>
-<button>Continue</button>
-</form>
-</div>
-</main>`));
-});
-
-/* SIGN UP */
-
-app.post("/signup", async (req, res) => {
-  if (!supabase)
-    return res.status(503).send("Supabase is not connected.");
-
-  const { name, phone, city, country } = req.body;
-
-  const existing = await findUser(phone);
-  if (existing) {
-    login(res, existing);
-    return res.redirect("/home");
-  }
-
-  const dgboId = `JRP-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
-
-  const { data, error } = await supabase
-    .from("members")
-    .insert({
-      full_name: name,
-      phone,
-      dgbo_id: dgboId,
-      reputation: 0,
-      verified: false,
-      status: "active",
-      city: city || null,
-      country: country || "Kenya",
-      account_type: "person",
-      public_profile: true,
-      public_phone: false,
-      public_email: false,
-      online: true
-    })
-    .select()
-    .single();
-
-  if (error)
-    return res.status(500).send("Account creation failed: " + esc(error.message));
-
-  await supabase.from("jr_wallets").upsert({
-    member_id: data.id,
-    balance: 0,
-    credits: 0
-  });
-
-  await supabase.from("jr_memberships").upsert({
-    member_id: data.id,
-    plan: "free",
-    price: 0,
-    match_fee: 30
-  });
-
-  log("New member", { phone, name });
-
-  login(res, data);
-  res.redirect("/home");
+app.post("/register",async(req,res)=>{
+ try{
+  const name=clean(req.body.name),phone=clean(req.body.phone),year=clean(req.body.year),password=clean(req.body.password);
+  if(!name||!phone||!password)return res.status(400).send("Complete all required fields.");
+  if(await phoneMember(phone))return res.redirect("/login?error=exists");
+  const dgbo=await nextDGBO();
+  const row={
+   dgbo_id:dgbo,full_name:name,phone,reputation:0,verified:false,status:"active",
+   password_hash:hash(password),bio:"",location:"",country:"Kenya",
+   profile_photo:"",public_profile:true,public_phone:false,theme:"green",
+   role:"person",birth_year:year
+  };
+  const {data,error}=await sb.from("members").insert(row).select().single();
+  if(error)throw error;
+  res.redirect("/home?id="+data.id);
+ }catch(e){console.error(e);res.status(500).send("Registration failed: "+esc(e.message));}
 });
 
 /* LOGIN */
 
-app.post("/login", async (req, res) => {
-  const u = await findUser(req.body.phone);
+app.get("/login",(req,res)=>res.send(layout("Sign in",`
+<header><h1>JR PHEEF</h1></header><main><div class="card">
+${req.query.error?`<p>Account already exists. Sign in below.</p>`:""}
+<form method="POST" action="/login">
+<input name="phone" placeholder="Phone number" required>
+<input id="pw" name="password" type="password" placeholder="Password" required>
+<label><input type="checkbox" onclick="pw.type=this.checked?'text':'password'"> 👁 Show password</label>
+<button>Continue</button></form></div></main>`)));
 
-  if (!u)
-    return res.status(401).send(
-      html("JR PHEEF", `<main><div class="card">
-      <h2>Account not found</h2>
-      <p>Please create your JR PHEEF account first.</p>
-      <a class="btn" href="/">Create account</a>
-      </div></main>`)
-    );
-
-  await saveUser(u.phone, {
-    online: true,
-    last_login: new Date().toISOString()
-  });
-
-  login(res, u);
-  res.redirect("/home");
+app.post("/login",async(req,res)=>{
+ const u=await phoneMember(req.body.phone);
+ if(!u||u.password_hash!==hash(req.body.password))return res.status(401).send("Incorrect phone or password.");
+ res.redirect("/home?id="+u.id);
 });
 
 /* HOME */
 
-app.get("/home", async (req, res) => {
-  const phone = sessionUser(req);
-  const u = await findUser(phone);
-
-  if (!u) return res.redirect("/");
-
-  const membership =
-    supabase &&
-    (await supabase.from("jr_memberships").select("*")
-      .eq("member_id", u.id).maybeSingle());
-
-  const plan = membership?.data?.plan || "free";
-
-  res.send(html("JR PHEEF", `
-<header>
-<h1>JR PHEEF</h1>
-<p>Welcome, ${esc(u.full_name)} 👋</p>
-<span class="pill">${plan.toUpperCase()}</span>
-</header>
-
+app.get("/home",async(req,res)=>{
+ const u=await member(req.query.id); if(!u)return res.redirect("/login");
+ const theme=u.theme||"green";
+ res.send(layout("JR PHEEF",`
+<header><h1>JR PHEEF</h1><p>Welcome, ${esc(u.full_name)} 👋</p><b>${esc(u.dgbo_id)}</b></header>
 <main>
-
-<div class="card">
-<h2>👤 Your Profile</h2>
-${u.avatar_url
-  ? `<img class="avatar" src="${esc(u.avatar_url)}">`
-  : `<div class="avatar" style="background:#ddd;border-radius:50%;
-     display:flex;align-items:center;justify-content:center">👤</div>`}
-<p><b>${esc(u.full_name)}</b></p>
-<p>${esc(u.bio || "Tell people a little about yourself.")}</p>
-
-<form method="POST" action="/profile">
-<textarea name="bio" placeholder="Your bio">${esc(u.bio || "")}</textarea>
-<input name="city" value="${esc(u.city || "")}" placeholder="City">
-<input name="country" value="${esc(u.country || "Kenya")}" placeholder="Country">
-
-<label>
-<input type="checkbox" name="public_profile"
-${u.public_profile ? "checked" : ""}>
- Show profile publicly
-</label>
-
-<label>
-<input type="checkbox" name="public_phone"
-${u.public_phone ? "checked" : ""}>
- Show phone publicly
-</label>
-
-<button>Save profile</button>
-</form>
-</div>
+<div class="card"><h2>👤 Your Profile</h2>
+${u.profile_photo?`<img class="avatar" src="${esc(u.profile_photo)}">`:"<div class=\"avatar\" style=\"display:grid;place-items:center\">👤</div>"}
+<p><b>${esc(u.full_name)}</b></p><p>${esc(u.bio||"Tell people a little about yourself.")}</p>
+<a class="btn" href="/profile?id=${u.id}">Edit profile</a></div>
 
 <div class="grid">
-
-<div class="card">
-<h2>🔎 Find</h2>
-<p>People, products, services and opportunities.</p>
-<a class="btn" href="/find">Explore</a>
+<div class="card"><h2>🔎 Find</h2><p>People, products, services and opportunities.</p><a class="btn" href="/find?id=${u.id}">Explore</a></div>
+<div class="card"><h2>🏪 Create</h2><p>Listings are free.</p><a class="btn" href="/listing?id=${u.id}">Create</a></div>
+<div class="card"><h2>🤝 Matches</h2><p>Local and international connections.</p><a class="btn" href="/matches?id=${u.id}">View matches</a></div>
+<div class="card"><h2>💬 Connections</h2><p>Chat and mingle naturally.</p><a class="btn" href="/connections?id=${u.id}">Open</a></div>
+<div class="card"><h2>💞 Love & Friendship</h2><p>Meet people seeking genuine connections.</p><a class="btn" href="/love?id=${u.id}">Discover</a></div>
+<div class="card"><h2>🤝 Deal Rooms</h2><p>Business conversations stay inside JR PHEEF.</p><a class="btn" href="/deals?id=${u.id}">Open</a></div>
+<div class="card"><h2>🚚 Delivery</h2><p>Connect with approved riders.</p><a class="btn" href="/delivery?id=${u.id}">Request</a></div>
+<div class="card"><h2>🏢 Organizations</h2><p>Business, institution and organization operations.</p><a class="btn" href="/organization?id=${u.id}">Manage</a></div>
+<div class="card"><h2>🎁 Wallet</h2><p>Rewards: KSh ${u.rewards||0}<br>Credits: KSh ${u.credits||0}</p><a class="btn" href="/wallet?id=${u.id}">Open wallet</a></div>
 </div>
 
-<div class="card">
-<h2>🏪 Sell</h2>
-<p>Listings are FREE.</p>
-<a class="btn" href="/sell">Create listing</a>
-</div>
+<div class="card"><h2>⭐ Membership</h2>
+<p>FREE — listings + normal connections</p><p>PRO — KSh 99/month</p><p>PRIME — KSh 149/month</p>
+<a class="btn" href="/upgrade?id=${u.id}&plan=pro">Try PRO</a>
+<a class="btn" href="/upgrade?id=${u.id}&plan=prime">Try PRIME</a></div>
 
-<div class="card">
-<h2>🤝 Matches</h2>
-<p>People and opportunities matched around you and internationally.</p>
-<a class="btn" href="/matches">View matches</a>
-</div>
+<div class="card"><h2>🎨 Wallpaper & Theme</h2>
+<form method="POST" action="/theme"><input type="hidden" name="id" value="${u.id}">
+<select name="theme"><option value="green" ${theme=="green"?"selected":""}>JR PHEEF Green</option>
+<option value="blue" ${theme=="blue"?"selected":""}>Ocean Blue</option>
+<option value="purple" ${theme=="purple"?"selected":""}>Royal Purple</option>
+<option value="gold" ${theme=="gold"?"selected":""}>Gold</option>
+<option value="black" ${theme=="black"?"selected":""}>Black</option></select>
+<button>Save theme</button></form></div>
 
-<div class="card">
-<h2>💬 Connections</h2>
-<p>Talk, mingle, build friendships and make real connections.</p>
-<a class="btn" href="/connections">Open</a>
-</div>
-
-<div class="card">
-<h2>💞 Love & Friendship</h2>
-<p>Discover people looking for genuine connections.</p>
-<a class="btn" href="/matches?type=friendship">Discover</a>
-</div>
-
-<div class="card">
-<h2>🤝 Deal Rooms</h2>
-<p>Keep business conversations and agreements inside JR PHEEF.</p>
-<a class="btn" href="/deal">Open</a>
-</div>
-
-<div class="card">
-<h2>🚚 Delivery</h2>
-<p>Connect with approved riders and delivery providers.</p>
-<a class="btn" href="/delivery">Request</a>
-</div>
-
-<div class="card">
-<h2>🏢 Organizations</h2>
-<p>Businesses, institutions and organizations can operate here.</p>
-<a class="btn" href="/organization">Manage</a>
-</div>
-
-</div>
-
-<div class="card">
-<h2>🎁 Wallet</h2>
-<p>Rewards and JR PHEEF Credits.</p>
-<a class="btn" href="/wallet">Open wallet</a>
-</div>
-
-<div class="card">
-<h2>⭐ Membership</h2>
-<p>FREE — listings + normal connections</p>
-<p>PRO — KSh 99/month</p>
-<p>PRIME — KSh 149/month</p>
-<a class="btn" href="/upgrade?plan=pro">Try PRO</a>
-<a class="btn" href="/upgrade?plan=prime">Try PRIME</a>
-</div>
-
-<div class="card">
-<h2>🎨 Theme</h2>
-<form method="POST" action="/theme">
-<select name="theme">
-<option value="green">JR PHEEF Green</option>
-<option value="blue">Ocean Blue</option>
-<option value="purple">Royal Purple</option>
-<option value="black">Classic Black</option>
-<option value="gold">Gold</option>
-</select>
-<button>Save theme</button>
-</form>
-</div>
-
-<div class="card">
-<a class="btn" href="/logout">Sign out</a>
-</div>
-
-</main>`));
+<div class="card"><a class="btn" href="/">Sign out</a></div>
+</main>`,theme));
 });
 
 /* PROFILE */
 
-app.post("/profile", async (req, res) => {
-  const phone = sessionUser(req);
-  if (!phone) return res.redirect("/");
-
-  await saveUser(phone, {
-    bio: req.body.bio || null,
-    city: req.body.city || null,
-    country: req.body.country || "Kenya",
-    public_profile: !!req.body.public_profile,
-    public_phone: !!req.body.public_phone
-  });
-
-  res.redirect("/home");
+app.get("/profile",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ res.send(layout("Profile",`<header><h1>👤 Edit Profile</h1></header><main><div class="card">
+<form method="POST" action="/profile" enctype="multipart/form-data">
+<input type="hidden" name="id" value="${u.id}">
+${u.profile_photo?`<img class="avatar" src="${esc(u.profile_photo)}"><br>`:""}
+<label>Profile photo — choose directly from gallery</label>
+<input type="file" name="photo" accept="image/*">
+<input name="name" value="${esc(u.full_name)}" placeholder="Full name">
+<textarea name="bio" placeholder="Bio">${esc(u.bio||"")}</textarea>
+<input name="location" value="${esc(u.location||"")}" placeholder="City / location">
+<input name="country" value="${esc(u.country||"Kenya")}" placeholder="Country">
+<label><input type="checkbox" name="public_profile" ${u.public_profile!==false?"checked":""}> Show profile publicly</label>
+<label><input type="checkbox" name="public_phone" ${u.public_phone?"checked":""}> Show phone publicly</label>
+<button>Save profile</button></form></div></main>`));
 });
 
-/* PHOTO */
-
-app.post("/profile/photo", async (req, res) => {
-  const phone = sessionUser(req);
-  if (!phone || !supabase) return res.status(401).send("Not signed in.");
-
-  const { image } = req.body;
-  if (!image || !image.startsWith("data:image/"))
-    return res.status(400).send("Invalid image.");
-
-  const u = await findUser(phone);
-  const base64 = image.split(",")[1];
-  const buffer = Buffer.from(base64, "base64");
-  const path = `${u.id}-${Date.now()}.jpg`;
-
-  const upload = await supabase.storage
-    .from("profiles")
-    .upload(path, buffer, { contentType: "image/jpeg", upsert: true });
-
-  if (upload.error)
-    return res.status(500).send("Photo upload failed. Create a public 'profiles' bucket in Supabase Storage.");
-
-  const { data } = supabase.storage.from("profiles").getPublicUrl(path);
-
-  await saveUser(phone, { avatar_url: data.publicUrl });
-
-  res.redirect("/home");
+app.post("/profile",upload.single("photo"),async(req,res)=>{
+ const u=await member(req.body.id);if(!u)return res.redirect("/");
+ const data={
+  full_name:clean(req.body.name),bio:clean(req.body.bio),location:clean(req.body.location),
+  country:clean(req.body.country),public_profile:!!req.body.public_profile,public_phone:!!req.body.public_phone
+ };
+ if(req.file&&sb){
+  const path=`${u.id}/${Date.now()}.${req.file.originalname.split(".").pop()||"jpg"}`;
+  const x=await sb.storage.from("profiles").upload(path,req.file.buffer,{contentType:req.file.mimetype,upsert:true});
+  if(!x.error)data.profile_photo=sb.storage.from("profiles").getPublicUrl(path).data.publicUrl;
+ }
+ await save("members",data,u.id);
+ res.redirect("/home?id="+u.id);
 });
 
-/* THEME */
-
-app.post("/theme", async (req, res) => {
-  const phone = sessionUser(req);
-  if (!phone) return res.redirect("/");
-
-  await saveUser(phone, { theme: req.body.theme || "green" });
-  res.redirect("/home");
-});
-
-/* SELL */
-
-app.get("/sell", async (req, res) => {
-  const phone = sessionUser(req);
-  const u = await findUser(phone);
-  if (!u) return res.redirect("/");
-
-  res.send(html("Sell", `
-<header><h1>🏪 Sell on JR PHEEF</h1></header>
-<main><div class="card">
-<p>Listing is FREE.</p>
-<form method="POST" action="/sell">
-<input name="title" placeholder="What are you selling?" required>
-<textarea name="description" placeholder="Describe it"></textarea>
-<input name="price" type="number" placeholder="Price">
-<input name="location" value="${esc(u.city || "")}" placeholder="Location">
-<input name="category" placeholder="Category">
-<button>Create listing</button>
-</form>
-</div></main>`));
-});
-
-app.post("/sell", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  await supabase.from("jr_listings").insert({
-    member_id: u.id,
-    title: req.body.title,
-    description: req.body.description,
-    price: Number(req.body.price || 0),
-    location: req.body.location,
-    category: req.body.category,
-    status: "active"
-  });
-
-  log("Listing created", { member: u.id });
-  res.redirect("/find");
+app.post("/theme",async(req,res)=>{
+ await save("members",{theme:req.body.theme},req.body.id);
+ res.redirect("/home?id="+req.body.id);
 });
 
 /* FIND */
 
-app.get("/find", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const { data } = await supabase
-    .from("jr_listings")
-    .select("*")
-    .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  res.send(html("Find", `
-<header><h1>🔎 Find</h1>
-<p>Products • Services • Opportunities</p></header>
-<main>
-${(data || []).map(x => `
-<div class="card">
-<h2>${esc(x.title)}</h2>
-<p>${esc(x.description)}</p>
-<p><b>KSh ${esc(x.price)}</b></p>
-<p>📍 ${esc(x.location)}</p>
-<p>${esc(x.category || "")}</p>
-<a class="btn" href="/connect?listing=${x.id}">Connect</a>
-</div>`).join("") || "<div class='card'>Nothing listed yet.</div>"}
+app.get("/find",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ const {data:ls}=await sb.from("listings").select("*").eq("status","active").limit(30);
+ const {data:people}=await sb.from("members").select("*").eq("status","active").neq("id",u.id).limit(20);
+ res.send(layout("Find",`<header><h1>🔎 Find</h1></header><main>
+<div class="card"><h2>People & Connections</h2>${(people||[]).map(p=>`
+<div class="card"><b>${esc(p.full_name)}</b><p>${esc(p.bio||"JR PHEEF member")}</p>
+<p>${esc(p.location||"Location not shared")}</p><a class="btn" href="/chat?id=${u.id}&to=${p.id}">Connect</a></div>`).join("")}</div>
+<div class="card"><h2>Marketplace</h2>${(ls||[]).map(x=>`
+<div class="card"><b>${esc(x.title)}</b><p>${esc(x.description||"")}</p><p>KSh ${esc(x.price||"")}</p><p>${esc(x.location||"")}</p></div>`).join("")||"<p>No listings yet.</p>"}</div>
 </main>`));
 });
 
-/* MATCHES */
+/* LISTING */
 
-app.get("/matches", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const { data } = await supabase
-    .from("members")
-    .select("*")
-    .eq("status", "active")
-    .neq("id", u.id)
-    .eq("public_profile", true)
-    .limit(30);
-
-  const shuffled = (data || [])
-    .sort(() => Math.random() - 0.5)
-    .slice(0, 12);
-
-  res.send(html("Matches", `
-<header><h1>🤝 JR PHEEF Matches</h1>
-<p>Discover new people and opportunities.</p></header>
-<main>
-<div class="grid">
-${shuffled.map(x => `
-<div class="card">
-${x.avatar_url
- ? `<img class="avatar" src="${esc(x.avatar_url)}">`
- : "👤"}
-<h3>${esc(x.full_name)}</h3>
-<p>${esc(x.bio || "JR PHEEF member")}</p>
-<p>📍 ${esc(x.city || "Location available on connection")}</p>
-<a class="btn" href="/connect?person=${x.id}">Connect</a>
-</div>`).join("")}
-</div>
-</main>`));
+app.get("/listing",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ res.send(layout("Create Listing",`<header><h1>🏪 Create</h1></header><main><div class="card">
+<form method="POST" action="/listing"><input type="hidden" name="member_id" value="${u.id}">
+<input name="title" placeholder="What are you offering?" required>
+<textarea name="description" placeholder="Description"></textarea>
+<input name="price" type="number" placeholder="Price">
+<input name="location" placeholder="Location">
+<select name="category"><option>Product</option><option>Service</option><option>Business</option><option>Job</option><option>Property</option><option>Investment</option><option>Event</option></select>
+<button>Create free listing</button></form></div></main>`));
 });
 
-/* CONNECTION */
-
-app.get("/connect", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const target = req.query.person
-    ? await supabase.from("members").select("*").eq("id", req.query.person).maybeSingle()
-    : null;
-
-  if (!target?.data)
-    return res.redirect("/find");
-
-  const x = target.data;
-
-  const { data: connection } = await supabase
-    .from("jr_connections")
-    .insert({
-      member_a: u.id,
-      member_b: x.id,
-      type: req.query.type || "connection",
-      score: 1,
-      status: "pending"
-    })
-    .select()
-    .maybeSingle();
-
-  await notify(
-    x.id,
-    "New JR PHEEF connection",
-    `${u.full_name} would like to connect with you.`,
-    "connection"
-  );
-
-  res.send(html("Connection", `
-<header><h1>🤝 Connection sent</h1></header>
-<main><div class="card">
-<h2>${esc(x.full_name)}</h2>
-<p>Your connection request has been sent.</p>
-<p>Once accepted, you can communicate inside JR PHEEF.</p>
-<a class="btn" href="/home">Back home</a>
-</div></main>`));
+app.post("/listing",async(req,res)=>{
+ await sb.from("listings").insert({...req.body,status:"active"});
+ res.redirect("/home?id="+req.body.member_id);
 });
 
-/* CONNECTIONS */
+/* ROTATING MATCHES */
 
-app.get("/connections", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const { data } = await supabase
-    .from("jr_connections")
-    .select("*")
-    .or(`member_a.eq.${u.id},member_b.eq.${u.id}`)
-    .order("created_at", { ascending: false });
-
-  res.send(html("Connections", `
-<header><h1>💬 Connections</h1></header>
-<main>
-<div class="card">
-<h3>Real conversations happen here.</h3>
-<p>JR PHEEF keeps normal social interaction free while protecting users from contact harvesting.</p>
-</div>
-${(data || []).map(c => `
-<div class="card">
-<p>🤝 Connection: <b>${esc(c.type)}</b></p>
-<p>Status: ${esc(c.status)}</p>
-<a class="btn" href="/chat?id=${c.id}">Open conversation</a>
-</div>`).join("") || "<div class='card'>No connections yet.</div>"}
-</main>`));
+app.get("/matches",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ const {data}=await sb.from("members").select("*").eq("status","active").eq("public_profile",true).neq("id",u.id).limit(50);
+ let people=(data||[]).sort(()=>Math.random()-.5).slice(0,8);
+ res.send(layout("Matches",`<header><h1>🤝 Your Matches</h1><p>JR PHEEF gives different people opportunities to connect.</p></header><main>
+${people.map(p=>`<div class="card"><b>${esc(p.full_name)}</b><p>${esc(p.bio||"Open to connections")}</p><p>📍 ${esc(p.location||"Around you / international")}</p><a class="btn" href="/chat?id=${u.id}&to=${p.id}">Connect</a></div>`).join("")}</main>`));
 });
 
 /* CHAT */
 
-app.get("/chat", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const id = req.query.id;
-
-  const { data } = await supabase
-    .from("jr_messages")
-    .select("*")
-    .eq("connection_id", id)
-    .order("created_at");
-
-  res.send(html("Chat", `
-<header><h1>💬 JR PHEEF Chat</h1>
-<p>Connect safely.</p></header>
-<main>
-<div class="card">
-${(data || []).map(m => `
-<p><b>${m.sender_id === u.id ? "You" : "Member"}:</b>
-${m.blocked ? "🛡️ Message protected by JR PHEEF" : esc(m.message)}</p>
-`).join("") || "<p>No messages yet.</p>"}
-</div>
-
-<div class="card">
-<form method="POST" action="/chat">
-<input type="hidden" name="connection_id" value="${esc(id)}">
-<textarea name="message" placeholder="Write a message..." required></textarea>
-<button>Send</button>
-</form>
-<p class="small">
-For everyone's safety, JR PHEEF blocks phone numbers, emails and external links.
-</p>
-</div>
-</main>`));
+app.get("/chat",async(req,res)=>{
+ const u=await member(req.query.id),to=await member(req.query.to);if(!u||!to)return res.redirect("/");
+ const {data}=await sb.from("messages").select("*").or(`and(sender_id.eq.${u.id},receiver_id.eq.${to.id}),and(sender_id.eq.${to.id},receiver_id.eq.${u.id})`).order("created_at");
+ res.send(layout("Connection",`<header><h1>💬 ${esc(to.full_name)}</h1><p>Talk naturally. JR PHEEF protects contact information.</p></header><main>
+<div class="card">${(data||[]).map(m=>`<p><b>${m.sender_id==u.id?"You":esc(to.full_name)}:</b> ${esc(m.body)}</p>`).join("")||"<p>Start the conversation.</p>"}</div>
+<div class="card"><form method="POST" action="/chat">
+<input type="hidden" name="sender_id" value="${u.id}"><input type="hidden" name="receiver_id" value="${to.id}">
+<textarea name="body" placeholder="Write a message..." required></textarea><button>Send</button></form></div></main>`));
 });
 
-app.post("/chat", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const blocked = blockedMessage(req.body.message);
-
-  const { data: c } = await supabase
-    .from("jr_connections")
-    .select("*")
-    .eq("id", req.body.connection_id)
-    .maybeSingle();
-
-  if (!c) return res.status(404).send("Connection not found.");
-
-  const receiver = c.member_a === u.id ? c.member_b : c.member_a;
-
-  await supabase.from("jr_messages").insert({
-    sender_id: u.id,
-    receiver_id: receiver,
-    connection_id: c.id,
-    message: blocked
-      ? "🛡️ JR PHEEF protected this message because it appears to contain contact information or an external contact request."
-      : req.body.message,
-    blocked,
-    block_reason: blocked ? "contact_or_external_link" : null
-  });
-
-  if (!blocked)
-    await notify(receiver, "New message", "You have a new JR PHEEF message.", "message");
-
-  res.redirect("/chat?id=" + encodeURIComponent(req.body.connection_id));
+app.post("/chat",async(req,res)=>{
+ const body=clean(req.body.body);
+ if(block.test(body))return res.status(400).send("JR PHEEF blocked this message because it appears to contain contact details, links or an attempt to move a transaction outside JR PHEEF.");
+ await sb.from("messages").insert({sender_id:req.body.sender_id,receiver_id:req.body.receiver_id,body});
+ res.redirect(`/chat?id=${req.body.sender_id}&to=${req.body.receiver_id}`);
 });
 
-/* DELIVERY */
+/* LOVE / FRIENDSHIP */
 
-app.get("/delivery", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u) return res.redirect("/");
-
-  res.send(html("Delivery", `
-<header><h1>🚚 JR PHEEF Delivery</h1></header>
-<main>
-
-<div class="card">
-<h2>Request delivery</h2>
-<p>Rider matching is FREE for the customer.</p>
-
-<form method="POST" action="/delivery">
-<input name="pickup" placeholder="Pickup location" required>
-<input name="destination" placeholder="Destination" required>
-<textarea name="description" placeholder="What needs to be delivered?"></textarea>
-<button>Find rider</button>
-</form>
-</div>
-
-<div class="card">
-<h2>🛵 Become a JR PHEEF Rider</h2>
-<p>Approved riders can receive delivery opportunities.</p>
-<a class="btn" href="/rider">Register as rider</a>
-</div>
-
-</main>`));
+app.get("/love",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ const {data}=await sb.from("members").select("*").eq("status","active").eq("public_profile",true).neq("id",u.id).limit(30);
+ res.send(layout("Love & Friendship",`<header><h1>💞 Love & Friendship</h1><p>Genuine connections inside JR PHEEF.</p></header><main>
+${(data||[]).sort(()=>Math.random()-.5).slice(0,10).map(p=>`<div class="card"><b>${esc(p.full_name)}</b><p>${esc(p.bio||"Looking for meaningful connections.")}</p><p>📍 ${esc(p.location||"")}</p><a class="btn" href="/chat?id=${u.id}&to=${p.id}">Connect</a></div>`).join("")}</main>`));
 });
 
-app.post("/delivery", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
+/* DEAL ROOMS */
 
-  await supabase.from("jr_delivery_requests").insert({
-    requester_id: u.id,
-    pickup: req.body.pickup,
-    destination: req.body.destination,
-    description: req.body.description,
-    status: "requested"
-  });
-
-  res.send(html("Delivery", `
-<header><h1>🚚 Request received</h1></header>
-<main><div class="card">
-<h2>Searching for a rider...</h2>
-<p>JR PHEEF will match available approved riders around the request.</p>
-<a class="btn" href="/home">Done</a>
+app.get("/deals",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ res.send(layout("Deal Room",`<header><h1>🤝 Deal Room</h1></header><main><div class="card">
+<p>Keep business discussions and agreements inside JR PHEEF.</p>
+<p>Current ${u.plan?.toUpperCase()||"FREE"} match fee: KSh ${plans[u.plan||"free"].match}</p>
+<form method="POST" action="/deal"><input type="hidden" name="member_id" value="${u.id}">
+<input name="other" placeholder="Matched member ID"><input name="amount" type="number" placeholder="Transaction amount"><button>Create Deal Room</button></form>
 </div></main>`));
 });
 
-/* RIDER */
-
-app.get("/rider", async (req, res) => {
-  if (!sessionUser(req)) return res.redirect("/");
-
-  res.send(html("Rider", `
-<header><h1>🛵 JR PHEEF Rider</h1></header>
-<main><div class="card">
-<form method="POST" action="/rider">
-<input name="company_name" placeholder="Company / individual">
-<input name="vehicle_type" placeholder="Motorbike, car, van..." required>
-<input name="vehicle_number" placeholder="Vehicle registration">
-<input name="location" placeholder="Operating location">
-<button>Apply as rider</button>
-</form>
-</div></main>`));
+app.post("/deal",async(req,res)=>{
+ const fee=plans[(await member(req.body.member_id)).plan||"free"].match;
+ const {data,error}=await sb.from("deal_rooms").insert({member_a:req.body.member_id,member_b:req.body.other,amount:req.body.amount||0,match_fee:fee,status:"open"}).select().single();
+ if(error)return res.status(400).send(error.message);
+ res.send(layout("Deal Room",`<header><h1>🤝 Deal Room Created</h1></header><main><div class="card"><h2>${esc(data.id)}</h2><p>Status: OPEN</p><p>Match fee: KSh ${fee}</p><p>Payments are currently TEST MODE.</p></div></main>`));
 });
 
-app.post("/rider", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
+/* DELIVERY / RIDERS */
 
-  await supabase.from("jr_riders").insert({
-    member_id: u.id,
-    company_name: req.body.company_name,
-    vehicle_type: req.body.vehicle_type,
-    vehicle_number: req.body.vehicle_number,
-    location: req.body.location,
-    approved: false,
-    verified: false,
-    online: false
-  });
-
-  res.send(html("Rider", `
-<header><h1>🛵 Application received</h1></header>
-<main><div class="card">
-<p>Your rider application is awaiting JR PHEEF approval.</p>
-<a class="btn" href="/home">Return home</a>
-</div></main>`));
+app.get("/delivery",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ res.send(layout("Delivery",`<header><h1>🚚 Delivery</h1></header><main>
+<div class="card"><h2>Request delivery</h2><form method="POST" action="/delivery">
+<input type="hidden" name="member_id" value="${u.id}">
+<input name="pickup" placeholder="Pickup location" required><input name="destination" placeholder="Destination" required>
+<input name="item" placeholder="What needs moving?"><button>Find rider</button></form></div>
+<div class="card"><h2>Become an approved JR PHEEF rider</h2><form method="POST" action="/rider">
+<input type="hidden" name="member_id" value="${u.id}">
+<input name="company" placeholder="Company / transport company"><input name="vehicle" placeholder="Vehicle type">
+<input name="area" placeholder="Operating area"><button>Register as rider</button></form></div></main>`));
 });
 
-/* ORGANIZATION */
+app.post("/delivery",async(req,res)=>{
+ const {data}=await sb.from("riders").select("*").eq("status","approved").limit(30);
+ res.send(layout("Rider Matching",`<header><h1>🚚 Rider Matching</h1></header><main>
+<div class="card"><p>Request received. Approved riders are notified through JR PHEEF.</p></div>
+${(data||[]).map(r=>`<div class="card"><b>Approved rider</b><p>${esc(r.company||"Independent rider")}</p><p>${esc(r.area||"")}</p></div>`).join("")}</main>`));
+});
 
-app.get("/organization", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u) return res.redirect("/");
+app.post("/rider",async(req,res)=>{
+ await sb.from("riders").insert({...req.body,status:"pending"});
+ res.send(layout("Rider Registration",`<header><h1>🚚 Registration received</h1></header><main><div class="card"><p>Your rider application is pending approval.</p><p>Once approved, JR PHEEF can send you delivery match requests.</p></div></main>`));
+});
 
-  res.send(html("Organization", `
-<header><h1>🏢 Organization</h1></header>
-<main><div class="card">
+/* ORGANIZATIONS */
+
+app.get("/organization",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ res.send(layout("Organization",`<header><h1>🏢 Organization</h1></header><main><div class="card">
+<h2>Register business / institution / organization</h2>
 <form method="POST" action="/organization">
-<input name="name" placeholder="Company / Institution / Organization" required>
-<input name="type" placeholder="Type">
-<textarea name="description" placeholder="About the organization"></textarea>
-<input name="location" placeholder="Location">
-<button>Create organization</button>
-</form>
-</div></main>`));
+<input type="hidden" name="member_id" value="${u.id}">
+<input name="name" placeholder="Organization name" required>
+<input name="registration_no" placeholder="Official registration number">
+<input name="phone" placeholder="Organization phone">
+<input name="location" placeholder="Location"><textarea name="description" placeholder="What does the organization do?"></textarea>
+<button>Register organization</button></form></div></main>`));
 });
 
-app.post("/organization", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  await supabase.from("jr_organizations").insert({
-    owner_id: u.id,
-    name: req.body.name,
-    type: req.body.type,
-    description: req.body.description,
-    location: req.body.location,
-    country: u.country,
-    status: "pending"
-  });
-
-  res.redirect("/home");
+app.post("/organization",async(req,res)=>{
+ await sb.from("organizations").insert({...req.body,status:"pending"});
+ res.send(layout("Organization",`<header><h1>🏢 Submitted</h1></header><main><div class="card"><p>Organization registration submitted for approval.</p></div></main>`));
 });
 
-/* WALLET */
+/* WALLET / UPGRADE */
 
-app.get("/wallet", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
-
-  const { data } = await supabase
-    .from("jr_wallets")
-    .select("*")
-    .eq("member_id", u.id)
-    .maybeSingle();
-
-  res.send(html("Wallet", `
-<header><h1>🎁 JR PHEEF Wallet</h1></header>
-<main><div class="card">
-<h2>KSh ${esc(data?.balance || 0)}</h2>
-<p>JR PHEEF Credits: ${esc(data?.credits || 0)}</p>
-<p>Minimum individual withdrawal: KSh 200</p>
-<p class="small">Real M-Pesa withdrawals activate after payment integration.</p>
-</div></main>`));
+app.get("/wallet",async(req,res)=>{
+ const u=await member(req.query.id);if(!u)return res.redirect("/");
+ res.send(layout("Wallet",`<header><h1>🎁 JR PHEEF Wallet</h1></header><main><div class="card">
+<h2>Rewards</h2><p>KSh ${u.rewards||0}</p><h2>JR PHEEF Credits</h2><p>KSh ${u.credits||0}</p>
+<p>Minimum individual withdrawal: KSh 200</p><p class="muted">Real M-Pesa transfers activate after payment integration.</p></div></main>`));
 });
 
-/* DEAL ROOM */
-
-app.get("/deal", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u) return res.redirect("/");
-
-  res.send(html("Deal Room", `
-<header><h1>🤝 Deal Room</h1></header>
-<main><div class="card">
-<h2>Secure JR PHEEF Deal</h2>
-<p>Agree, communicate and complete the transaction inside JR PHEEF.</p>
-<p class="small">Payments are currently TEST MODE.</p>
-<form method="POST" action="/deal">
-<input name="amount" type="number" placeholder="Deal amount">
-<button>Create test Deal Room</button>
-</form>
-</div></main>`));
+app.get("/upgrade",async(req,res)=>{
+ const u=await member(req.query.id),p=plans[req.query.plan];if(!u||!p)return res.status(400).send("Invalid upgrade.");
+ await save("members",{plan:req.query.plan},u.id);
+ res.redirect("/home?id="+u.id);
 });
 
-app.post("/deal", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
+/* WHATSAPP — NATURAL, NOT COMMAND DEPENDENT */
 
-  const { data } = await supabase
-    .from("jr_deal_rooms")
-    .insert({
-      buyer_id: u.id,
-      amount: Number(req.body.amount || 0),
-      fee: 30,
-      status: "open"
-    })
-    .select()
-    .single();
-
-  res.send(html("Deal Room", `
-<header><h1>🤝 Deal Room created</h1></header>
-<main><div class="card">
-<p>Deal ID:</p>
-<h3>${esc(data.id)}</h3>
-<p>TEST MODE — M-Pesa is not connected.</p>
-<a class="btn" href="/home">Done</a>
-</div></main>`));
+app.post("/api/webhook/whatsapp",async(req,res)=>{
+ const from=req.body.From||"",msg=clean(req.body.Body),u=await phoneMember(from);
+ let reply;
+ if(!u)reply=`👋 Karibu JR PHEEF!\n\nCreate your account here:\n${BASE}/register`;
+ else reply=`👋 ${u.full_name}, karibu JR PHEEF.\n\nYou can use JR PHEEF naturally for people, opportunities, marketplace, connections, delivery and business.\n\nYour home:\n${BASE}/home?id=${u.id}`;
+ const x=new twilio.twiml.MessagingResponse();x.message(reply);res.type("text/xml").send(x.toString());
 });
 
-/* UPGRADE */
+/* OWNER COMMAND CENTER */
 
-app.get("/upgrade", async (req, res) => {
-  const u = await findUser(sessionUser(req));
-  if (!u || !supabase) return res.redirect("/");
+app.get("/owner",async(req,res)=>{
+ if(!process.env.OWNER_KEY||req.query.key!==process.env.OWNER_KEY)return res.status(403).send("🔒 Owner access denied.");
+ const [m,l,r,o]=await Promise.all([
+  sb.from("members").select("*").order("created_at",{ascending:false}).limit(100),
+  sb.from("listings").select("*").limit(100),
+  sb.from("riders").select("*").limit(100),
+  sb.from("organizations").select("*").limit(100)
+ ]);
+ res.send(layout("JR PHEEF Command Center",`<header><h1>👑 JR PHEEF</h1><p>COMMAND CENTER</p></header><main>
+<div class="grid"><div class="card"><h2>👥 Members</h2><b>${m.data?.length||0}</b></div>
+<div class="card"><h2>🏪 Listings</h2><b>${l.data?.length||0}</b></div>
+<div class="card"><h2>🚚 Riders</h2><b>${r.data?.length||0}</b></div>
+<div class="card"><h2>🏢 Organizations</h2><b>${o.data?.length||0}</b></div></div>
 
-  const plan = plans[req.query.plan];
-  if (!plan) return res.redirect("/home");
+<div class="card"><h2>👥 Member control</h2>
+${(m.data||[]).map(x=>`<p><b>${esc(x.full_name)}</b> — ${esc(x.dgbo_id)} — ${esc(x.status)}
+<form method="POST" action="/owner/member"><input type="hidden" name="id" value="${x.id}">
+<select name="status"><option>active</option><option>approved</option><option>suspended</option><option>pending</option></select>
+<select name="plan"><option value="free">FREE</option><option value="pro">PRO</option><option value="prime">PRIME</option></select>
+<button>Update</button></form></p>`).join("")}</div>
 
-  await supabase.from("jr_memberships").upsert({
-    member_id: u.id,
-    plan: req.query.plan,
-    price: plan.price,
-    match_fee: plan.match
-  });
+<div class="card"><h2>🚚 Rider approvals</h2>
+${(r.data||[]).map(x=>`<p>${esc(x.company||"Rider")} — ${esc(x.status)}
+<form method="POST" action="/owner/rider"><input type="hidden" name="id" value="${x.id}">
+<button name="status" value="approved">Approve</button><button class="danger" name="status" value="rejected">Reject</button></form></p>`).join("")}</div>
 
-  res.redirect("/home");
-});
-
-/* WHATSAPP — NATURAL LANGUAGE */
-
-app.post("/api/webhook/whatsapp", async (req, res) => {
-  const from = req.body.From || "";
-  const msg = (req.body.Body || "").trim();
-  const text = msg.toLowerCase();
-
-  const u = await findUser(from);
-
-  let reply;
-
-  if (!u) {
-    reply =
-`👋 Karibu JR PHEEF!
-
-Find. Match. Connect. Trade.
-
-I can help you discover:
-🛒 Products
-🏪 Sellers
-🤝 People
-💼 Opportunities
-💞 Connections
-🚚 Delivery
-🏢 Businesses
-
-Create your JR PHEEF account here:
-${BASE}
-
-Once registered, you can use JR PHEEF naturally — no commands required.`;
-  } else if (/sell|selling|sell.*item/.test(text)) {
-    reply =
-`🏪 Sawa ${u.full_name}!
-
-Tell me what you're selling, the price and location.
-
-Your listing can be created FREE on JR PHEEF:
-${BASE}/sell`;
-  } else if (/buy|looking for|need|searching/.test(text)) {
-    reply =
-`🔎 Nimekupata ${u.full_name}!
-
-Tell me what you're looking for, your budget and location.
-
-JR PHEEF will look for suitable matches around you and beyond.`;
-  } else if (/love|relationship|dating|friend|friendship/.test(text)) {
-    reply =
-`💞 JR PHEEF Connections
-
-You can discover genuine friendship, social and relationship connections.
-
-Open your connections:
-${BASE}/matches?type=friendship`;
-  } else if (/delivery|rider|transport|move/.test(text)) {
-    reply =
-`🚚 Sawa!
-
-JR PHEEF can match your delivery request with approved riders.
-
-Open delivery:
-${BASE}/delivery`;
-  } else if (/hello|hi|hey|help|karibu/.test(text)) {
-    reply =
-`👋 Karibu ${u.full_name}!
-
-Tell me naturally what you need.
-
-You can ask JR PHEEF to:
-🔎 Find something
-🏪 Sell something
-🤝 Find people
-💞 Make connections
-💼 Find opportunities
-🚚 Arrange delivery
-💬 Start a conversation`;
-  } else {
-    reply =
-`🤝 Nimekupata!
-
-Tell me in your own words what you are looking for or what you want to offer.
-
-JR PHEEF will help find the right people, products or opportunities.`;
-  }
-
-  const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(reply);
-  res.type("text/xml").send(twiml.toString());
-
-  log("WhatsApp", { from, message: msg });
-});
-
-/* LOGOUT */
-
-app.get("/logout", (req, res) => {
-  const token = req.headers.cookie
-    ?.split(";")
-    .map(x => x.trim())
-    .find(x => x.startsWith("jrp_session="))
-    ?.split("=")[1];
-
-  if (token) sessions.delete(token);
-
-  res.setHeader(
-    "Set-Cookie",
-    "jrp_session=; HttpOnly; Path=/; Max-Age=0"
-  );
-
-  res.redirect("/");
-});
-
-/* OWNER */
-
-app.get("/owner", async (req, res) => {
-  if (!process.env.OWNER_KEY || req.query.key !== process.env.OWNER_KEY)
-    return res.status(403).send("🔒 Owner access denied.");
-
-  let members = [];
-
-  if (supabase) {
-    const { data } = await supabase
-      .from("members")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
-
-    members = data || [];
-  }
-
-  res.send(html("JR PHEEF Command Center", `
-<header>
-<h1>👑 JR PHEEF</h1>
-<p>COMMAND CENTER</p>
-</header>
-<main>
-
-<div class="grid">
-
-<div class="card"><h2>👥 Members</h2>
-<h1>${members.length}</h1></div>
-
-<div class="card"><h2>🗄️ Supabase</h2>
-<h3>${supabase ? "CONNECTED" : "NOT CONNECTED"}</h3></div>
-
-<div class="card"><h2>🏪 Marketplace</h2>
-<h3>ACTIVE</h3></div>
-
-<div class="card"><h2>🤝 Connections</h2>
-<h3>ACTIVE</h3></div>
-
-<div class="card"><h2>🚚 Delivery</h2>
-<h3>ACTIVE</h3></div>
-
-<div class="card"><h2>💳 Payments</h2>
-<h3>TEST MODE</h3></div>
-
-</div>
-
-<div class="card">
-<h2>👤 Members</h2>
-${members.map(x => `
-<p><b>${esc(x.full_name)}</b>
-<br>${esc(x.phone)}
-<br>${esc(x.city || "")}
-<br>Status: ${esc(x.status)}</p>
-<hr>`).join("")}
-</div>
-
-<div class="card">
-<h2>📊 Live Activity</h2>
-${activity.map(x => `
-<p>• ${esc(x.type)}
-<br><span class="small">${esc(x.time)}</span></p>
-`).join("")}
-</div>
-
+<div class="card"><h2>🏢 Organization approvals</h2>
+${(o.data||[]).map(x=>`<p>${esc(x.name)} — ${esc(x.registration_no||"No registration number")} — ${esc(x.status)}
+<form method="POST" action="/owner/org"><input type="hidden" name="id" value="${x.id}">
+<button name="status" value="approved">Approve</button><button class="danger" name="status" value="rejected">Reject</button></form></p>`).join("")}</div>
 </main>`));
 });
+
+app.post("/owner/member",async(req,res)=>{
+ if(req.body.key!==process.env.OWNER_KEY&&req.headers.referer?.includes("/owner")===false)return res.status(403).send("Denied");
+ await save("members",{status:req.body.status,plan:req.body.plan},req.body.id);
+ res.redirect("back");
+});
+app.post("/owner/rider",async(req,res)=>{await save("riders",{status:req.body.status},req.body.id);res.redirect("back")});
+app.post("/owner/org",async(req,res)=>{await save("organizations",{status:req.body.status},req.body.id);res.redirect("back")});
 
 /* HEALTH */
 
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "JR PHEEF",
-    supabase: !!supabase,
-    marketplace: true,
-    connections: true,
-    messaging: true,
-    delivery: true,
-    organizations: true,
-    dealRooms: true,
-    payments: "TEST",
-    mpesa: false
-  });
-});
+app.get("/health",(req,res)=>res.json({
+ ok:true,service:"JR PHEEF",supabase:!!sb,accounts:true,
+ marketplace:true,matches:true,connections:true,love_friendship:true,
+ delivery:true,organizations:true,owner:true,payments:"TEST MODE"
+}));
 
-/* START */
-
-app.listen(PORT, () => {
-  console.log(`🚀 JR PHEEF running on ${PORT}`);
-  console.log(`🗄️ Supabase: ${supabase ? "CONNECTED" : "NOT CONNECTED"}`);
-  console.log("👤 Accounts: ACTIVE");
-  console.log("🏠 Unified home: ACTIVE");
-  console.log("👤 Profiles/photos/privacy: ACTIVE");
-  console.log("🏪 Free marketplace listings: ACTIVE");
-  console.log("🔎 Local/international discovery: ACTIVE");
-  console.log("🤝 Rotating connections/matches: ACTIVE");
-  console.log("💬 Natural conversations: ACTIVE");
-  console.log("🛡️ Contact/link protection: ACTIVE");
-  console.log("💞 Friendship/love connections: ACTIVE");
-  console.log("🚚 Rider/delivery matching: ACTIVE");
-  console.log("🏢 Organization accounts: ACTIVE");
-  console.log("🤝 Deal Rooms: ACTIVE");
-  console.log("🎁 Wallet/rewards: ACTIVE");
-  console.log("📱 WhatsApp: ACTIVE");
-  console.log("👑 Owner Center: ACTIVE");
-  console.log("💳 Payments: TEST MODE");
-  console.log("📱 M-Pesa: NOT CONNECTED");
+app.listen(PORT,()=>{
+ console.log(`🚀 JR PHEEF running on ${PORT}`);
+ console.log(`🗄️ Supabase: ${sb?"CONNECTED":"NOT CONNECTED"}`);
+ console.log("👤 Registration/Login: ACTIVE");
+ console.log("🏠 Unified Home: ACTIVE");
+ console.log("👤 Profiles/Photos/Privacy: ACTIVE");
+ console.log("🏪 Free Listings: ACTIVE");
+ console.log("🔎 Discovery/Rotating Matches: ACTIVE");
+ console.log("💬 Natural Connections: ACTIVE");
+ console.log("🛡️ Contact Protection: ACTIVE");
+ console.log("💞 Love & Friendship: ACTIVE");
+ console.log("🚚 Rider Matching: ACTIVE");
+ console.log("🏢 Organizations: ACTIVE");
+ console.log("🤝 Deal Rooms: ACTIVE");
+ console.log("🎁 Wallet: ACTIVE");
+ console.log("👑 Owner Center: ACTIVE");
+ console.log("📱 WhatsApp: ACTIVE");
+ console.log("💳 Payments: TEST MODE");
 });
