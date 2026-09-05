@@ -1,277 +1,4 @@
-const express=require("express"),crypto=require("crypto"),multer=require("multer");
-const {createClient}=require("@supabase/supabase-js");
-const twilio=require("twilio");
-
-const app=express(),PORT=process.env.PORT||10000;
-const BASE="https://jr-pheef-marketplace.onrender.com";
-const KEY=process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY;
-const db=createClient(process.env.SUPABASE_URL,KEY);
-const tw=process.env.TWILIO_ACCOUNT_SID?twilio(process.env.TWILIO_ACCOUNT_SID,process.env.TWILIO_AUTH_TOKEN):null;
-const FROM=process.env.TWILIO_WHATSAPP_NUMBER;
-const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024}});
-app.use(express.urlencoded({extended:true}),express.json());
-
-// ---------- helpers ----------
-const plans={free:0,pro:20,prime:20};
-const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const clean=x=>String(x??"").trim();
-const phone=x=>{
- x=clean(x).replace(/^whatsapp:/i,"").replace(/[^\d+]/g,"");
- if(x.startsWith("07"))x="+254"+x.slice(1);
- if(x.startsWith("254"))x="+"+x;
- return x;
-};
-const hash=p=>crypto.scryptSync(p,process.env.PASSWORD_SALT||"jr-pheef-salt",32).toString("hex");
-// timing-safe compare — replaces the old `hash1 !== hash2` string comparison
-function passwordMatches(inputHash,storedHash){
- try{
-  let a=Buffer.from(String(inputHash),"hex"),b=Buffer.from(String(storedHash),"hex");
-  if(a.length!==b.length)return false;
-  return crypto.timingSafeEqual(a,b);
- }catch{return false}
-}
-const blocked=/(\+?\d[\d\s().-]{7,}|\b\d{9,13}\b|https?:\/\/|www\.|\.com\b|\.co\.ke\b|@\w+\.\w+|\bwhatsapp\b|\btelegram\b|\bemail\b)/i;
-const fee=n=>Math.max(5,30-(Number(n)||0));
-
-// very small in-memory login throttle (per phone). Resets on restart — a real
-// deployment should back this with Redis/DB too, but it stops naive brute force.
-const loginAttempts=new Map();
-function loginLocked(p){
- let a=loginAttempts.get(p);
- if(!a)return false;
- if(Date.now()-a.first>15*60*1000){loginAttempts.delete(p);return false}
- return a.count>=8;
-}
-function loginFail(p){
- let a=loginAttempts.get(p)||{count:0,first:Date.now()};
- a.count++;loginAttempts.set(p,a);
-}
-function loginOk(p){loginAttempts.delete(p)}
-
-async function one(t,id){let q=await db.from(t).select("*").eq("id",id).maybeSingle();return q.data}
-async function byPhone(p){let q=await db.from("members").select("*").eq("phone",phone(p)).maybeSingle();return q.data}
-async function save(t,d,id){return db.from(t).update(d).eq("id",id)}
-async function dgbo(){let q=await db.from("members").select("id",{count:"exact",head:true});return"DGBO-"+String((q.count||0)+1).padStart(6,"0")}
-
-// ---------- sessions (Supabase-backed, no more in-memory Map) ----------
-// requires a `sessions` table — see migrations.sql
-const SESSION_DAYS=30;
-async function startSession(res,u){
- let s=crypto.randomBytes(32).toString("hex");
- let csrf=crypto.randomBytes(16).toString("hex");
- let expires=new Date(Date.now()+SESSION_DAYS*24*60*60*1000).toISOString();
- let{error}=await db.from("sessions").insert({id:s,member_id:u.id,csrf_token:csrf,expires_at:expires});
- if(error){console.error("session create failed",error);throw error}
- res.setHeader("Set-Cookie",[
-  `sid=${s}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS*86400}`,
-  `csrf=${csrf}; Path=/; SameSite=Lax; Max-Age=${SESSION_DAYS*86400}`
- ]);
-}
-async function endSession(req,res){
- let h=req.headers.cookie||"",m=h.match(/(?:^|;\s*)sid=([^;]+)/);
- if(m)await db.from("sessions").delete().eq("id",m[1]);
- res.setHeader("Set-Cookie",["sid=; Max-Age=0; Path=/","csrf=; Max-Age=0; Path=/"]);
-}
-async function me(req){
- let h=req.headers.cookie||"",m=h.match(/(?:^|;\s*)sid=([^;]+)/);
- if(!m)return null;
- let{data:s}=await db.from("sessions").select("*").eq("id",m[1]).maybeSingle();
- if(!s)return null;
- if(new Date(s.expires_at)<new Date()){db.from("sessions").delete().eq("id",m[1]);return null}
- let u=await one("members",s.member_id);
- if(u)u._csrf=s.csrf_token;
- return u;
-}
-// CSRF check for state-changing requests. Cookie csrf must match both the
-// session's stored token and the hidden _csrf field submitted with the form.
-function csrfOk(req,u){
- let h=req.headers.cookie||"",m=h.match(/(?:^|;\s*)csrf=([^;]+)/);
- let cookieCsrf=m&&m[1],bodyCsrf=req.body&&req.body._csrf;
- return !!(u&&u._csrf&&cookieCsrf&&bodyCsrf&&cookieCsrf===u._csrf&&bodyCsrf===u._csrf);
-}
-function csrfField(u){return `<input type=hidden name=_csrf value="${esc(u._csrf)}">`}
-function requireCsrf(req,res,u){
- if(!csrfOk(req,u)){res.status(403).send(page("Session expired","<main><div class=card><h2>Your session expired.</h2><p>Please refresh the page and try again.</p><a class=btn href=/>Back home</a></div></main>"));return false}
- return true
-}
-
-// ---------- page shell ----------
-function page(title,body,theme="green"){
- const c={green:"#08783c",blue:"#2563eb",purple:"#7c3aed",gold:"#b8860b",black:"#111"}[theme]||"#08783c";
- return`<!doctype html><html><meta name=viewport content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
- <style>body{margin:0;background:#f3f8f5;font:15px Arial;color:#111}header{background:${c};color:white;padding:24px 20px}main{max-width:850px;margin:auto;padding:14px}.card{background:white;padding:18px;border-radius:18px;margin:12px 0;box-shadow:0 2px 10px #0001}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}input,textarea,select{width:100%;padding:12px;margin:5px 0;border:1px solid #ccc;border-radius:10px;box-sizing:border-box}button,.btn{background:${c};color:white;border:0;border-radius:10px;padding:11px 15px;margin:4px;text-decoration:none;display:inline-block;cursor:pointer}img{max-width:120px}.avatar{width:110px;height:110px;border-radius:50%;object-fit:cover}.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:20px;background:#eee;margin-left:6px}</style>
- <body>${body}</body></html>`
-}
-function home(u){
- return page("JR PHEEF",`<header><h1>JR PHEEF</h1><p>Welcome, ${esc(u.full_name)} 👋</p><b>${esc(u.dgbo_id)}</b></header><main>
- <div class=card><h2>👤 Profile</h2>${u.profile_photo?`<img class=avatar src="${esc(u.profile_photo)}">`:"👤"}<p><b>${esc(u.full_name)}</b></p><p>${esc(u.bio||"Tell people about yourself.")}</p><a class=btn href=/profile>Edit profile</a></div>
- <div class=grid>
- <div class=card><h2>🔎 Find</h2><p>People, products, services and opportunities.</p><a class=btn href=/find>Explore</a></div>
- <div class=card><h2>🏪 Sell</h2><p>Listings are FREE.</p><a class=btn href=/listing>Create listing</a></div>
- <div class=card><h2>🤝 Matches</h2><p>Local and international.</p><a class=btn href=/matches>View matches</a></div>
- <div class=card><h2>💬 Connections</h2><p>Talk naturally and safely.</p><a class=btn href=/connections>Open</a></div>
- <div class=card><h2>💞 Love & Friendship</h2><a class=btn href=/love>Discover</a></div>
- <div class=card><h2>🤝 Deal Rooms</h2><a class=btn href=/deals>Open</a></div>
- <div class=card><h2>🚚 Delivery</h2><p>Free request.</p><a class=btn href=/delivery>Request</a></div>
- <div class=card><h2>🏢 Organizations</h2><a class=btn href=/organization>Manage</a></div>
- <div class=card><h2>📣 JR PHEEF Promote</h2><p>Community picks, official & featured brands.</p><a class=btn href=/promote>Explore</a></div>
- </div>
- <div class=card><h2>🎁 Wallet</h2><p>Rewards: KSh ${u.rewards||0}<br>Credits: KSh ${u.credits||0}</p><a class=btn href=/wallet>Open</a></div>
- <div class=card><h2>⭐ Membership</h2><p>FREE — KSh ${fee(u.paid_matches)} next trade match</p><p>PRO — KSh 99/month</p><p>PRIME — KSh 149/month</p>
- <form method=post action=/upgrade style="display:inline">${csrfField(u)}<input type=hidden name=plan value=pro><button>Try PRO</button></form>
- <form method=post action=/upgrade style="display:inline">${csrfField(u)}<input type=hidden name=plan value=prime><button>Try PRIME</button></form>
- </div>
- <div class=card><h2>🎨 Theme</h2><form method=post action=/theme>${csrfField(u)}<select name=theme><option value=green>JR PHEEF Green</option><option value=blue>Ocean Blue</option><option value=purple>Royal Purple</option><option value=gold>Gold</option><option value=black>Black</option></select><button>Save theme</button></form></div>
- <div class=card><form method=post action=/logout>${csrfField(u)}<button>Sign out</button></form></div></main>`,u.theme)
-}
-
-app.get("/",async(req,res)=>{let u=await me(req);res.send(u?home(u):page("JR PHEEF",`<header><h1>JR PHEEF</h1><p>Find. Match. Connect. Trade.</p></header><main><div class=card><h2>Welcome 👋</h2><p>Discover people, businesses, products, services and opportunities.</p><a class=btn href=/register>Create account</a><a class=btn href=/login>Sign in</a></div></main>`))});
-
-app.get("/register",(req,res)=>res.send(page("Register",`<header><h1>Create JR PHEEF Account</h1></header><main><div class=card><form method=post><input name=name placeholder="Full name" required><input name=phone placeholder="Phone number" required><input name=year type=number placeholder="Birth year"><input name=password type=password placeholder="Create password" required><button>Create account</button></form></div></main>`)));
-
-app.post("/register",async(req,res)=>{
- try{
-  let p=phone(req.body.phone),old=await byPhone(p);
-  if(old)return res.redirect("/login?exists=1");
-  let {data,error}=await db.from("members").insert({dgbo_id:await dgbo(),full_name:clean(req.body.name),phone:p,birth_year:req.body.year||null,password_hash:hash(req.body.password),status:"active",role:"person"}).select().single();
-  if(error)throw error;
-  await startSession(res,data);res.redirect("/");
- }catch(e){console.error(e);res.status(500).send("Registration failed: "+esc(e.message))}
-});
-
-app.get("/login",(req,res)=>res.send(page("Sign in",`<header><h1>JR PHEEF</h1></header><main><div class=card>${req.query.exists?"<p>Account already exists. Sign in below.</p>":""}${req.query.locked?"<p>Too many attempts. Please wait 15 minutes and try again.</p>":""}<form method=post><input name=phone placeholder="Phone number" required><input name=password type=password placeholder="Password" required><button>Continue</button></form><p>No account? <a href=/register>Register</a></p></div></main>`)));
-
-app.post("/login",async(req,res)=>{
- let p=phone(req.body.phone);
- if(loginLocked(p))return res.redirect("/login?locked=1");
- let u=await byPhone(req.body.phone);
- if(!u||!u.password_hash||!passwordMatches(hash(req.body.password),u.password_hash)){
-  loginFail(p);
-  return res.status(401).send(page("Login failed",`<main><div class=card><h2>Incorrect phone or password.</h2><a class=btn href=/login>Try again</a><a class=btn href=/register>Create account</a></div></main>`));
- }
- loginOk(p);
- await save("members",{last_login:new Date().toISOString()},u.id);await startSession(res,u);res.redirect("/");
-});
-
-app.post("/logout",async(req,res)=>{let u=await me(req);if(u&&!csrfOk(req,u))return res.status(403).send("Denied");await endSession(req,res);res.redirect("/")});
-app.get("/logout",async(req,res)=>{await endSession(req,res);res.redirect("/")}); // fallback for old links
-
-app.get("/profile",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- res.send(page("Profile",`<header><h1>👤 Edit Profile</h1></header><main><div class=card><form method=post enctype=multipart/form-data>${csrfField(u)}${u.profile_photo?`<img class=avatar src="${esc(u.profile_photo)}"><br>`:""}<input type=file name=photo accept=image/*><input name=name value="${esc(u.full_name)}" placeholder="Name"><textarea name=bio placeholder="Bio">${esc(u.bio||"")}</textarea><input name=location value="${esc(u.location||"")}" placeholder="City / location"><input name=country value="${esc(u.country||"Kenya")}" placeholder="Country"><label><input type=checkbox name=public_profile ${u.public_profile!==false?"checked":""}> Public profile</label><label><input type=checkbox name=public_phone ${u.public_phone?"checked":""}> Public phone</label><button>Save profile</button></form></div></main>`,u.theme))
-});
-
-app.post("/profile",upload.single("photo"),async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- if(!requireCsrf(req,res,u))return;
- let d={full_name:clean(req.body.name),bio:clean(req.body.bio),location:clean(req.body.location),country:clean(req.body.country),public_profile:!!req.body.public_profile,public_phone:!!req.body.public_phone};
- if(req.file){
-  let ext=(req.file.originalname.split(".").pop()||"jpg").replace(/\W/g,""),path=`${u.id}/${Date.now()}.${ext}`;
-  let x=await db.storage.from("profiles").upload(path,req.file.buffer,{contentType:req.file.mimetype,upsert:true});
-  if(x.error)console.error(x.error);else d.profile_photo=db.storage.from("profiles").getPublicUrl(path).data.publicUrl;
- }
- await save("members",d,u.id);res.redirect("/");
-});
-
-app.post("/theme",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- if(!requireCsrf(req,res,u))return;
- if(["green","blue","purple","gold","black"].includes(req.body.theme))await save("members",{theme:req.body.theme},u.id);
- res.redirect("/")
-});
-
-app.post("/upgrade",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- if(!requireCsrf(req,res,u))return;
- if(["pro","prime"].includes(req.body.plan))await save("members",{plan:req.body.plan},u.id);
- res.redirect("/")
-});
-
-app.get("/listing",async(req,res)=>{let u=await me(req);if(!u)return res.redirect("/login");res.send(page("Listing",`<header><h1>🏪 Free Listing</h1></header><main><div class=card><form method=post enctype=multipart/form-data>${csrfField(u)}<input name=title placeholder="What are you selling/offering?" required><textarea name=description placeholder="Description"></textarea><input name=price type=number placeholder="Price"><input name=location placeholder="Location"><select name=category><option>Product</option><option>Service</option><option>Business</option><option>Job</option><option>Property</option><option>Investment</option><option>Other</option></select><input type=file name=photos accept=image/* multiple><button>Publish FREE</button></form></div></main>`,u.theme))});
-
-app.post("/listing",upload.array("photos",5),async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- if(!requireCsrf(req,res,u))return;
- let photos=[];
- for(let f of(req.files||[])){let ext=(f.originalname.split(".").pop()||"jpg").replace(/\W/g,""),p=`${u.id}/${Date.now()}-${crypto.randomBytes(3).toString("hex")}.${ext}`,x=await db.storage.from("listing-photos").upload(p,f.buffer,{contentType:f.mimetype,upsert:true});if(!x.error)photos.push(db.storage.from("listing-photos").getPublicUrl(p).data.publicUrl)}
- await db.from("jr_listings").insert({member_id:u.id,title:clean(req.body.title),description:clean(req.body.description),price:Number(req.body.price)||0,location:clean(req.body.location),category:req.body.category||"Product",photos,status:"active"});
- res.redirect("/");
-});
-
-app.get("/find",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- let q=clean(req.query.q),{data}=await db.from("jr_listings").select("*").eq("status","active").ilike("title",`%${q}%`).limit(30);
- res.send(page("Find",`<header><h1>🔎 Find</h1></header><main><div class=card><form><input name=q value="${esc(q)}" placeholder="What are you looking for?"><button>Search</button></form></div>${(data||[]).map(x=>`<div class=card><h3>${esc(x.title)}</h3><p>${esc(x.description)}</p><b>KSh ${Number(x.price||0).toLocaleString()}</b><p>📍 ${esc(x.location)}</p><a class=btn href="/trade/${x.id}">Connect</a></div>`).join("")||"<div class=card>No listings found yet.</div>"}</main>`,u.theme))
-});
-
-app.get("/matches",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- let {data}=await db.from("members").select("*").eq("status","active").eq("public_profile",true).neq("id",u.id).limit(100);
- data=(data||[]).sort(()=>Math.random()-.5).slice(0,10);
- res.send(page("Matches",`<header><h1>🤝 Matches</h1><p>JR PHEEF keeps giving different people opportunities.</p></header><main>${data.map(p=>`<div class=card><b>${esc(p.full_name)}</b><p>${esc(p.bio||"Open to connections")}</p><p>📍 ${esc(p.location||"Location private")}</p><a class=btn href="/connect/${p.id}">Connect FREE</a></div>`).join("")||"<div class=card>No matches yet.</div>"}</main>`,u.theme))
-});
-
-app.get("/connect/:id",async(req,res)=>{
- let u=await me(req),p=await one("members",req.params.id);if(!u||!p||u.id===p.id)return res.redirect("/matches");
- await db.from("connections").insert({member_a:u.id,member_b:p.id,type:"normal"});
- res.redirect(`/chat/${p.id}`);
-});
-
-app.get("/connections",async(req,res)=>{let u=await me(req);if(!u)return res.redirect("/login");let {data}=await db.from("connections").select("*").or(`member_a.eq.${u.id},member_b.eq.${u.id}`).limit(30);res.send(page("Connections",`<header><h1>💬 Connections</h1></header><main>${(data||[]).map(x=>{let id=x.member_a===u.id?x.member_b:x.member_a;return`<div class=card><a class=btn href=/chat/${id}>Open conversation</a></div>`}).join("")||"<div class=card>No connections yet.</div>"}</main>`,u.theme))});
-
-app.get("/chat/:id",async(req,res)=>{
- let u=await me(req),p=await one("members",req.params.id);if(!u||!p)return res.redirect("/login");
- let {data}=await db.from("messages").select("*").or(`and(sender_id.eq.${u.id},receiver_id.eq.${p.id}),and(sender_id.eq.${p.id},receiver_id.eq.${u.id})`).order("created_at");
- res.send(page("Chat",`<header><h1>💬 ${esc(p.full_name)}</h1><p>JR PHEEF protects contact details.</p></header><main><div class=card>${(data||[]).map(m=>`<p><b>${m.sender_id===u.id?"You":esc(p.full_name)}:</b> ${esc(m.body)}</p>`).join("")||"Start chatting."}</div><div class=card><form method=post action="/chat/${p.id}">${csrfField(u)}<textarea name=body placeholder="Write naturally..." required></textarea><button>Send</button></form></div></main>`,u.theme))
-});
-
-app.post("/chat/:id",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- if(!requireCsrf(req,res,u))return;
- let b=clean(req.body.body);
- if(blocked.test(b))return res.status(400).send(page("Protected",`<main><div class=card><h2>🛡️ JR PHEEF protected this conversation.</h2><p>Please keep contact details, links and outside-payment information inside JR PHEEF.</p><a class=btn href=/chat/${req.params.id}>Back to chat</a></div></main>`));
- await db.from("messages").insert({sender_id:u.id,receiver_id:req.params.id,body:b});res.redirect(`/chat/${req.params.id}`);
-});
-
-app.get("/trade/:id",async(req,res)=>{
- let u=await me(req),l=await one("jr_listings",req.params.id);if(!u||!l||l.member_id===u.id)return res.redirect("/find");
- let seller=await one("members",l.member_id),f=fee(u.paid_matches);
- res.send(page("Trade Match",`<header><h1>🤝 JR PHEEF Match</h1></header><main><div class=card><h2>${esc(l.title)}</h2><p>${esc(l.description)}</p><p>💰 KSh ${Number(l.price||0).toLocaleString()}</p><p>📍 ${esc(l.location)}</p><p>👤 ${esc(seller?.full_name||"Seller")}</p><h3>Your connection fee: KSh ${f}</h3><form method=post action=/trade/${l.id}/pay>${csrfField(u)}<button>Pay KSh ${f} & Open Deal Room</button></form></div></main>`,u.theme))
-});
-
-app.post("/trade/:id/pay",async(req,res)=>{
- let u=await me(req),l=await one("jr_listings",req.params.id);if(!u||!l||l.member_id===u.id)return res.redirect("/find");
- if(!requireCsrf(req,res,u))return;
- let seller=await one("members",l.member_id),f=fee(u.paid_matches);
- let {data:r}=await db.from("deal_rooms").insert({member_a:u.id,member_b:seller.id,listing_id:l.id,amount:l.price,match_fee:f,status:"open",member_a_paid:true,member_b_paid:false}).select().single();
- if(!r)return res.status(500).send("Could not create Deal Room.");
- await save("members",{paid_matches:(u.paid_matches||0)+1},u.id);
- res.redirect(`/deal/${r.id}`);
-});
-
-app.get("/deal/:id",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- let r=await one("deal_rooms",req.params.id);if(!r||![r.member_a,r.member_b].includes(u.id))return res.status(403).send("Denied");
- let other=await one("members",r.member_a===u.id?r.member_b:r.member_a);
- let {data:m}=await db.from("messages").select("*").or(`and(sender_id.eq.${u.id},receiver_id.eq.${other.id}),and(sender_id.eq.${other.id},receiver_id.eq.${u.id})`).order("created_at");
- res.send(page("Deal Room",`<header><h1>🤝 Deal Room</h1><p>Connected with ${esc(other.full_name)}</p></header><main><div class=card>${(m||[]).map(x=>`<p><b>${x.sender_id===u.id?"You":esc(other.full_name)}:</b> ${esc(x.body)}</p>`).join("")||"Deal Room ready."}</div><div class=card><form method=post action=/deal/${r.id}>${csrfField(u)}<textarea name=body placeholder="Talk normally..." required></textarea><button>Send</button></form></div></main>`,u.theme))
-});
-
-app.post("/deal/:id",async(req,res)=>{
- let u=await me(req),r=await one("deal_rooms",req.params.id);if(!u||!r||![r.member_a,r.member_b].includes(u.id))return res.status(403).send("Denied");
- if(!requireCsrf(req,res,u))return;
- let b=clean(req.body.body);if(blocked.test(b))return res.status(400).send("JR PHEEF blocked contact details or outside links.");
- let to=r.member_a===u.id?r.member_b:r.member_a;await db.from("messages").insert({sender_id:u.id,receiver_id:to,body:b});res.redirect(`/deal/${r.id}`);
-});
-
-app.get("/love",async(req,res)=>{let u=await me(req);if(!u)return res.redirect("/login");let {data}=await db.from("members").select("*").eq("status","active").eq("public_profile",true).neq("id",u.id).limit(30);res.send(page("Love & Friendship",`<header><h1>💞 Love & Friendship</h1></header><main>${(data||[]).sort(()=>Math.random()-.5).slice(0,10).map(p=>`<div class=card><b>${esc(p.full_name)}</b><p>${esc(p.bio||"Genuine connection")}</p><p>📍 ${esc(p.location||"")}</p><a class=btn href=/chat/${p.id}>Connect FREE</a></div>`).join("")}</main>`,u.theme))});
-
-app.get("/delivery",async(req,res)=>{let u=await me(req);if(!u)return res.redirect("/login");res.send(page("Delivery",`<header><h1>🚚 Delivery</h1></header><main><div class=card><form method=post>${csrfField(u)}<input name=pickup placeholder="Pickup" required><input name=destination placeholder="Destination" required><input name=item placeholder="What needs moving?"><button>Find rider FREE</button></form></div><div class=card><h3>Become a rider</h3><form method=post action=/rider>${csrfField(u)}<input name=company placeholder="Company / Independent"><input name=vehicle placeholder="Vehicle"><input name=area placeholder="Operating area"><button>Register</button></form></div></main>`,u.theme))});
-
-app.post("/delivery",async(req,res)=>{
- let u=await me(req);if(!u)return res.redirect("/login");
- if(!requireCsrf(req,res,u))return;
- let {data}=await db.from("riders").select("*").eq("status","approved").limit(20);res.send(page("Riders",`<header><h1>🚚 Riders</h1></header><main><div class=card><p>Your request is free. Approved riders can receive it.</p></div>${(data||[]).map(r=>`<div class=card>🚚 ${esc(r.company||"Independent rider")}<br>${esc(r.area||"")}</div>`).join("")}</main>`,u.theme))
+r.area||"")}</div>`).join("")}</main>`,u.theme))
 });
 
 app.post("/rider",async(req,res)=>{
@@ -376,3 +103,439 @@ app.post("/api/webhook/whatsapp",async(req,res)=>{
 app.get("/health",(req,res)=>res.json({ok:true,service:"JR PHEEF",database:"connected",listings:"jr_listings",matchFee:"30→5",freeListings:true,naturalChat:true,sessions:"db-backed",csrf:"enabled"}));
 
 app.listen(PORT,()=>console.log(`🚀 JR PHEEF running on ${PORT} | DB CONNECTED | MATCH FEE 30→5 | LISTINGS jr_listings | SESSIONS db-backed`));
+const express=require("express"),crypto=require("crypto"),{createClient}=require("@supabase/supabase-js"),twilio=require("twilio"),multer=require("multer");
+
+const app=express(),PORT=process.env.PORT||10000;
+const db=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY);
+const wa=process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN?twilio(process.env.TWILIO_ACCOUNT_SID,process.env.TWILIO_AUTH_TOKEN):null;
+const FROM=process.env.TWILIO_WHATSAPP_NUMBER;
+const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:5*1024*1024}});
+app.use(express.urlencoded({extended:true}));app.use(express.json());
+
+const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const phone=x=>String(x||"").replace(/^whatsapp:/i,"").trim();
+const hash=p=>crypto.scryptSync(p,process.env.PASSWORD_SALT||"jr-pheef-salt",32).toString("hex");
+const money=x=>Number(x||0).toLocaleString("en-KE");
+const blocked=/(\+?\d[\d\s().-]{7,}|\b\d{9,13}\b|https?:\/\/|www\.|[\w.-]+@[\w.-]+\.\w+|whatsapp|telegram|t\.me|bit\.ly)/i;
+const themes={green:"#08783c",blue:"#2563eb",purple:"#7c3aed",gold:"#b8860b",black:"#111827"};
+
+const get=async(id)=>db.from("members").select("*").eq("id",id).maybeSingle();
+const byPhone=async(p)=>db.from("members").select("*").eq("phone",phone(p)).maybeSingle();
+const update=(t,id,d)=>db.from(t).update(d).eq("id",id);
+const freeHours=()=>{let h=new Date(new Date().toLocaleString("en-US",{timeZone:"Africa/Nairobi"})).getHours();return h>=2&&h<6};
+
+async function active(u){
+ if(freeHours())return true;
+ return u?.active_until&&new Date(u.active_until)>new Date();
+}
+async function need(u){
+ if(await active(u))return true;
+ return false;
+}
+async function dgbo(){
+ const {count}=await db.from("members").select("*",{count:"exact",head:true});
+ return `DGBO-${String((count||0)+1).padStart(6,"0")}`;
+}
+function page(title,body,theme="green"){
+ return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+ <title>${esc(title)}</title><style>
+ :root{--c:${themes[theme]||themes.green};--bg:#f3f7f5}*{box-sizing:border-box}
+ body{margin:0;background:var(--bg);font-family:Arial;color:#111}
+ header{background:var(--c);color:white;padding:22px}main{max-width:900px;margin:auto;padding:14px}
+ .card{background:white;border-radius:18px;padding:18px;margin:12px 0;box-shadow:0 2px 10px #0001}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+ input,textarea,select{width:100%;padding:12px;margin:5px 0;border:1px solid #ccc;border-radius:10px}
+ button,.btn{background:var(--c);color:white;border:0;border-radius:10px;padding:11px 15px;text-decoration:none;display:inline-block;margin:4px;cursor:pointer}
+ img{max-width:150px}.avatar{width:110px;height:110px;border-radius:50%;object-fit:cover;border:3px solid var(--c)}
+ .muted{opacity:.65;font-size:13px}
+ </style></head><body>${body}</body></html>`;
+}
+
+/* HOME */
+
+app.get("/",(q,r)=>r.send(page("JR PHEEF",`
+<header><h1>JR PHEEF</h1><p>Find. Match. Connect. Trade.</p></header>
+<main><div class="card"><h2>Welcome 👋</h2>
+<p>People. Opportunities. Businesses. Services. Friendship. Love. Marketplace.</p>
+<a class="btn" href="/register">Create account</a><a class="btn" href="/login">Sign in</a></div></main>`)));
+
+/* AUTH */
+
+app.get("/register",(q,r)=>r.send(page("Register",`
+<header><h1>Create JR PHEEF Account</h1></header><main><div class="card">
+<form method="post">
+<input name="name" placeholder="Full name" required>
+<input name="phone" placeholder="Phone number" required>
+<input name="password" id="p" type="password" placeholder="Password" required>
+<label><input type="checkbox" onclick="p.type=this.checked?'text':'password'"> 👁 Show password</label>
+<button>Create account</button></form></div></main>`)));
+
+app.post("/register",async(q,r)=>{
+ try{
+  let name=String(q.body.name||"").trim(),p=phone(q.body.phone),pw=String(q.body.password||"");
+  if(!name||!p||!pw)return r.status(400).send("Complete all fields.");
+  if((await byPhone(p)).data)return r.redirect("/login?exists=1");
+  let id=(await dgbo());
+  let {data,error}=await db.from("members").insert({
+   dgbo_id:id,full_name:name,phone:p,reputation:0,verified:false,status:"active",
+   password_hash:hash(pw),bio:"",location:"",country:"Kenya",profile_photo:"",
+   public_profile:true,public_phone:false,theme:"green",role:"person",
+   plan:"free",rewards:0,credits:0,active_until:null
+  }).select().single();
+  if(error)throw error;
+  r.redirect("/home?id="+data.id);
+ }catch(e){console.error(e);r.status(500).send("Registration error: "+esc(e.message))}
+});
+
+app.get("/login",(q,r)=>r.send(page("Login",`
+<header><h1>JR PHEEF</h1></header><main><div class="card">
+${q.query.exists?"<p>Account already exists. Please sign in.</p>":""}
+<form method="post">
+<input name="phone" placeholder="Phone number" required>
+<input name="password" id="p" type="password" placeholder="Password" required>
+<label><input type="checkbox" onclick="p.type=this.checked?'text':'password'"> 👁 Show password</label>
+<button>Continue</button></form></div></main>`)));
+
+app.post("/login",async(q,r)=>{
+ let {data:u}=await byPhone(q.body.phone);
+ if(!u||u.password_hash!==hash(q.body.password))return r.status(401).send("Incorrect phone or password.");
+ r.redirect("/home?id="+u.id);
+});
+
+/* HOME */
+
+app.get("/home",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/login");
+ let ok=await need(u),free=freeHours(),t=u.theme||"green";
+ r.send(page("JR PHEEF",`
+<header><h1>JR PHEEF</h1><p>Welcome, ${esc(u.full_name)} 👋</p><b>${esc(u.dgbo_id)}</b></header>
+<main>
+<div class="card"><h2>👤 Profile</h2>
+${u.profile_photo?`<img class="avatar" src="${esc(u.profile_photo)}">`:"👤"}
+<p><b>${esc(u.full_name)}</b></p><p>${esc(u.bio||"Add your bio.")}</p>
+<a class="btn" href="/profile?id=${u.id}">Edit profile</a></div>
+
+<div class="card"><h2>⚡ JR PHEEF Access</h2>
+${free?"🌙 FREE NIGHT ACCESS — 2:00 AM–6:00 AM":ok?`✅ ACTIVE until ${new Date(u.active_until).toLocaleString("en-KE")}`:"🔒 Activate for KSh 30 / 5 hours"}
+${!ok&&!free?`<form method="post" action="/activate"><input type="hidden" name="id" value="${u.id}"><button>Activate KSh 30 / 5 Hours</button></form>`:""}
+</div>
+
+<div class="grid">
+${[
+["🔎 Find","/find","People, goods, services & opportunities"],
+["🏪 Listings","/listing","List free"],
+["🤝 Matches","/matches","Rotating local & global matches"],
+["💬 Connections","/connections","Normal conversations"],
+["💞 Love & Friendship","/love","Genuine connections"],
+["🤝 Deal Rooms","/deals","Protected business rooms"],
+["🚚 Delivery","/delivery","Approved riders"],
+["🏢 Organizations","/organization","Business & institution tools"],
+["📣 Brands","/brands","Brand promotion"],
+["🎁 Wallet","/wallet","Rewards & credits"],
+["👑 Owner","/owner","Command Center"]
+].map(x=>`<div class="card"><h2>${x[0]}</h2><p>${x[2]}</p><a class="btn" href="${x[1]}?id=${u.id}">Open</a></div>`).join("")}
+</div>
+
+<div class="card"><h2>🎨 Theme / Wallpaper</h2>
+<form method="post" action="/theme"><input type="hidden" name="id" value="${u.id}">
+<select name="theme">${Object.keys(themes).map(x=>`<option ${t==x?"selected":""}>${x}</option>`).join("")}</select>
+<button>Save</button></form></div>
+</main>`,t));
+});
+
+/* ACTIVATION */
+
+app.post("/activate",async(q,r)=>{
+ let {data:u}=await get(q.body.id);if(!u)return r.redirect("/login");
+ if(freeHours())return r.redirect("/home?id="+u.id);
+ let until=new Date(Date.now()+5*60*60*1000).toISOString();
+ await update("members",u.id,{active_until:until,last_activation:new Date().toISOString()});
+ await db.from("payments").insert({member_id:u.id,amount:30,type:"activation",status:"test"});
+ r.redirect("/home?id="+u.id);
+});
+
+/* PROFILE */
+
+app.get("/profile",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ r.send(page("Profile",`<header><h1>👤 Profile</h1></header><main><div class="card">
+<form method="post" enctype="multipart/form-data">
+<input type="hidden" name="id" value="${u.id}">
+${u.profile_photo?`<img class="avatar" src="${esc(u.profile_photo)}"><br>`:""}
+<input type="file" name="photo" accept="image/*">
+<input name="name" value="${esc(u.full_name)}" placeholder="Name">
+<textarea name="bio" placeholder="Bio">${esc(u.bio)}</textarea>
+<input name="location" value="${esc(u.location)}" placeholder="Location">
+<input name="country" value="${esc(u.country||"Kenya")}" placeholder="Country">
+<label><input type="checkbox" name="public_profile" ${u.public_profile!==false?"checked":""}> Public profile</label>
+<label><input type="checkbox" name="public_phone" ${u.public_phone?"checked":""}> Public phone</label>
+<button>Save</button></form></div></main>`));
+});
+
+app.post("/profile",upload.single("photo"),async(q,r)=>{
+ let {data:u}=await get(q.body.id);if(!u)return r.redirect("/");
+ let d={full_name:String(q.body.name||"").trim(),bio:String(q.body.bio||"").trim(),location:String(q.body.location||"").trim(),country:String(q.body.country||"Kenya").trim(),public_profile:!!q.body.public_profile,public_phone:!!q.body.public_phone};
+ if(q.file){
+  let path=`${u.id}/${Date.now()}.jpg`,x=await db.storage.from("profiles").upload(path,q.file.buffer,{contentType:q.file.mimetype,upsert:true});
+  if(!x.error)d.profile_photo=db.storage.from("profiles").getPublicUrl(path).data.publicUrl;
+ }
+ await update("members",u.id,d);r.redirect("/home?id="+u.id);
+});
+
+app.post("/theme",async(q,r)=>{await update("members",q.body.id,{theme:q.body.theme});r.redirect("/home?id="+q.body.id)});
+
+/* LISTINGS */
+
+app.get("/listing",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ r.send(page("Listing",`<header><h1>🏪 Free Listing</h1></header><main><div class="card">
+<form method="post"><input type="hidden" name="member_id" value="${u.id}">
+<input name="item_name" placeholder="What are you offering?" required>
+<textarea name="description" placeholder="Description"></textarea>
+<input name="price" type="number" placeholder="Price">
+<input name="location" placeholder="Location">
+<select name="category"><option>Product</option><option>Service</option><option>Business</option><option>Job</option><option>Property</option><option>Investment</option><option>Event</option></select>
+<button>Publish Free</button></form></div></main>`));
+});
+
+app.post("/listing",async(q,r)=>{
+ let {data:u}=await get(q.body.member_id);if(!u)return r.redirect("/");
+ if(!(await need(u)))return r.redirect("/home?id="+u.id);
+ let {error}=await db.from("jr_listings").insert({
+  member_id:u.id,seller_name:u.full_name,phone:u.phone,item_name:q.body.item_name,
+  description:q.body.description||"",price:q.body.price||null,location:q.body.location||"",
+  category:q.body.category,status:"ACTIVE",photos:[]
+ });
+ if(error)return r.status(400).send(error.message);
+ r.redirect("/home?id="+u.id);
+});
+
+/* FIND */
+
+app.get("/find",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ if(!(await need(u)))return r.redirect("/home?id="+u.id);
+ let term=String(q.query.q||"").trim();
+ let query=db.from("jr_listings").select("*").eq("status","ACTIVE").limit(40);
+ if(term)query=query.or(`item_name.ilike.%${term}%,description.ilike.%${term}%,location.ilike.%${term}%`);
+ let {data}=await query;
+ r.send(page("Find",`<header><h1>🔎 Find</h1></header><main>
+<div class="card"><form><input type="hidden" name="id" value="${u.id}"><input name="q" placeholder="Search anything"><button>Search</button></form></div>
+${(data||[]).map(x=>`<div class="card"><h3>${esc(x.item_name)}</h3><p>${esc(x.description||"")}</p><b>KSh ${money(x.price)}</b><p>📍 ${esc(x.location||"")}</p><a class="btn" href="/connect?id=${u.id}&listing=${x.id}">Connect</a></div>`).join("")||"<div class=card>No results yet.</div>"}
+</main>`));
+});
+
+/* MATCHES */
+
+app.get("/matches",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ let {data:p}=await db.from("members").select("*").eq("status","active").eq("public_profile",true).neq("id",u.id).limit(80);
+ p=(p||[]).sort(()=>Math.random()-.5).slice(0,10);
+ r.send(page("Matches",`<header><h1>🤝 Matches</h1><p>JR PHEEF rotates opportunities so different people can be discovered.</p></header><main>
+${p.map(x=>`<div class="card"><b>${esc(x.full_name)}</b><p>${esc(x.bio||"Open to connections")}</p><p>📍 ${esc(x.location||"Around you / international")}</p><a class="btn" href="/chat?id=${u.id}&to=${x.id}">Connect</a></div>`).join("")}
+</main>`));
+});
+
+/* CONNECT TO LISTING */
+
+app.get("/connect",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ if(!(await need(u)))return r.redirect("/home?id="+u.id);
+ let {data:l}=await db.from("jr_listings").select("*").eq("id",q.query.listing).single();
+ if(!l||l.member_id===u.id)return r.redirect("/find?id="+u.id);
+ let {data:old}=await db.from("deal_rooms").select("*").eq("listing_id",l.id).eq("buyer_id",u.id).limit(1);
+ let room=old?.[0];
+ if(!room){
+  let x=await db.from("deal_rooms").insert({listing_id:l.id,buyer_id:u.id,seller_id:l.member_id,buyer_phone:u.phone,seller_phone:l.phone,status:"negotiating",buyer_paid:false,seller_paid:false}).select().single();
+  room=x.data;
+ }
+ r.send(page("Match",`<header><h1>🎉 Match Found</h1></header><main><div class="card">
+<h2>${esc(l.item_name)}</h2><p>${esc(l.description||"")}</p><p>KSh ${money(l.price)}</p><p>📍 ${esc(l.location||"")}</p>
+<p>🔐 Secure Deal Room created.</p><a class="btn" href="/chat?id=${u.id}&room=${room?.id}">CHAT</a></div></main>`));
+});
+
+/* CHAT */
+
+app.get("/chat",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ let to=q.query.to,room=q.query.room;
+ if(room){
+  let {data:rr}=await db.from("deal_rooms").select("*").eq("id",room).single();
+  if(!rr||([rr.buyer_id,rr.seller_id].indexOf(u.id)<0))return r.redirect("/home?id="+u.id);
+  to=rr.buyer_id===u.id?rr.seller_id:rr.buyer_id;
+ }
+ let {data:p}=await get(to);if(!p)return r.redirect("/home?id="+u.id);
+ let {data:m}=await db.from("messages").select("*").or(`and(sender_id.eq.${u.id},receiver_id.eq.${p.id}),and(sender_id.eq.${p.id},receiver_id.eq.${u.id})`).order("created_at");
+ r.send(page("Chat",`<header><h1>💬 ${esc(p.full_name)}</h1></header><main>
+<div class="card">${(m||[]).map(x=>`<p><b>${x.sender_id===u.id?"You":esc(p.full_name)}:</b> ${esc(x.body||x.message)}</p>`).join("")||"Start the conversation."}</div>
+<div class="card"><form method="post"><input type="hidden" name="from" value="${u.id}"><input type="hidden" name="to" value="${p.id}">
+<textarea name="body" placeholder="Write naturally..." required></textarea><button>Send</button></form></div></main>`));
+});
+
+app.post("/chat",async(q,r)=>{
+ let body=String(q.body.body||"").trim();
+ if(blocked.test(body))return r.status(400).send("JR PHEEF protected this message because it appears to contain contact details, links or an attempt to move the connection outside JR PHEEF.");
+ let {error}=await db.from("messages").insert({sender_id:q.body.from,receiver_id:q.body.to,body});
+ if(error)return r.status(400).send(error.message);
+ r.redirect(`/chat?id=${q.body.from}&to=${q.body.to}`);
+});
+
+/* FRIENDSHIP / LOVE */
+
+app.get("/connections",(q,r)=>r.redirect(`/matches?id=${q.query.id}`));
+app.get("/love",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ let {data:p}=await db.from("members").select("*").eq("status","active").eq("public_profile",true).neq("id",u.id).limit(50);
+ r.send(page("Love & Friendship",`<header><h1>💞 Love & Friendship</h1></header><main>
+${(p||[]).sort(()=>Math.random()-.5).slice(0,12).map(x=>`<div class=card><b>${esc(x.full_name)}</b><p>${esc(x.bio||"Meaningful connections")}</p><p>📍 ${esc(x.location||"")}</p><a class=btn href="/chat?id=${u.id}&to=${x.id}">Connect</a></div>`).join("")}</main>`));
+});
+
+/* DEALS */
+
+app.get("/deals",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ let {data:d}=await db.from("deal_rooms").select("*").or(`buyer_id.eq.${u.id},seller_id.eq.${u.id}`).order("created_at",{ascending:false});
+ r.send(page("Deal Rooms",`<header><h1>🤝 Deal Rooms</h1></header><main>
+${(d||[]).map(x=>`<div class=card><b>Room ${esc(x.id)}</b><p>Status: ${esc(x.status)}</p><a class=btn href="/chat?id=${u.id}&room=${x.id}">CHAT</a></div>`).join("")||"<div class=card>No Deal Rooms yet.</div>"}</main>`));
+});
+
+/* DELIVERY */
+
+app.get("/delivery",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ let {data:riders}=await db.from("riders").select("*").eq("status","approved").limit(30);
+ r.send(page("Delivery",`<header><h1>🚚 Delivery</h1></header><main>
+<div class=card><form method=post><input type=hidden name=member_id value="${u.id}">
+<input name=pickup placeholder="Pickup" required><input name=destination placeholder="Destination" required>
+<input name=item placeholder="Item"><button>Find Rider</button></form></div>
+<div class=card><h2>Register as rider</h2><form method=post action="/rider">
+<input type=hidden name=member_id value="${u.id}"><input name=company placeholder="Company">
+<input name=vehicle placeholder="Vehicle"><input name=area placeholder="Operating area">
+<button>Apply</button></form></div>
+${(riders||[]).map(x=>`<div class=card>🚚 ${esc(x.company||"Approved rider")} — ${esc(x.area||"")}</div>`).join("")}</main>`));
+});
+
+app.post("/delivery",async(q,r)=>{
+ let {data}=await db.from("riders").select("*").eq("status","approved").limit(1);
+ r.send(page("Delivery",`<header><h1>🚚 Rider Match</h1></header><main><div class=card>
+${data?.[0]?`A rider match is available. JR PHEEF will notify the approved rider.`:"No approved rider available yet. Your request can be queued."}</div></main>`));
+});
+
+app.post("/rider",async(q,r)=>{
+ let {error}=await db.from("riders").insert({member_id:q.body.member_id,company:q.body.company,vehicle:q.body.vehicle,area:q.body.area,status:"pending",online:false});
+ r.send(page("Rider",`<header><h1>🚚 Application received</h1></header><main><div class=card>${error?"Could not submit: "+esc(error.message):"Application submitted. Once approved, you can receive JR PHEEF delivery requests."}</div></main>`));
+});
+
+/* ORGANIZATIONS */
+
+app.get("/organization",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ r.send(page("Organization",`<header><h1>🏢 Organization</h1></header><main><div class=card>
+<form method=post><input type=hidden name=member_id value="${u.id}">
+<input name=name placeholder="Organization name" required><input name=registration_no placeholder="Registration number">
+<input name=phone placeholder="Official phone"><input name=location placeholder="Location">
+<textarea name=description placeholder="What does the organization do?"></textarea><button>Register</button>
+</form></div></main>`));
+});
+
+app.post("/organization",async(q,r)=>{
+ let {error}=await db.from("organizations").insert({...q.body,status:"pending"});
+ r.send(page("Organization",`<header><h1>🏢 Organization</h1></header><main><div class=card>${error?esc(error.message):"Registration submitted for approval."}</div></main>`));
+});
+
+/* BRANDS */
+
+app.get("/brands",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ let {data:b}=await db.from("brand_promotions").select("*").eq("status","active").limit(30);
+ r.send(page("Brands",`<header><h1>📣 Brands & Promotions</h1><p>Discover brands and support businesses.</p></header><main>
+<div class=card><p>Users can recommend/share brands through JR PHEEF. Official paid brand campaigns receive promoted placement.</p></div>
+${(b||[]).map(x=>`<div class=card><h2>${esc(x.brand_name)}</h2><p>${esc(x.description||"")}</p></div>`).join("")}</main>`));
+});
+
+/* WALLET */
+
+app.get("/wallet",async(q,r)=>{
+ let {data:u}=await get(q.query.id);if(!u)return r.redirect("/");
+ r.send(page("Wallet",`<header><h1>🎁 Wallet</h1></header><main><div class=card>
+<h2>Rewards: KSh ${money(u.rewards)}</h2><h2>Credits: KSh ${money(u.credits)}</h2>
+<p>Minimum withdrawal: KSh 200</p><p class=muted>M-Pesa payout activates after live payment integration.</p>
+</div></main>`));
+});
+
+/* OWNER */
+
+app.get("/owner",async(q,r)=>{
+ if(!process.env.OWNER_KEY||q.query.key!==process.env.OWNER_KEY)return r.status(403).send("🔒 Owner access denied.");
+ let [m,l,ri,o,b]=await Promise.all([
+  db.from("members").select("*").order("created_at",{ascending:false}).limit(100),
+  db.from("jr_listings").select("*").limit(100),
+  db.from("riders").select("*").limit(100),
+  db.from("organizations").select("*").limit(100),
+  db.from("brand_promotions").select("*").limit(100)
+ ]);
+ r.send(page("Owner",`<header><h1>👑 JR PHEEF COMMAND CENTER</h1></header><main>
+<div class=grid>
+<div class=card>👥 Members<br><b>${m.data?.length||0}</b></div>
+<div class=card>🏪 Listings<br><b>${l.data?.length||0}</b></div>
+<div class=card>🚚 Riders<br><b>${ri.data?.length||0}</b></div>
+<div class=card>🏢 Organizations<br><b>${o.data?.length||0}</b></div>
+<div class=card>📣 Brands<br><b>${b.data?.length||0}</b></div>
+</div>
+
+<div class=card><h2>Members</h2>${(m.data||[]).map(x=>`
+<form method=post action="/owner/member">
+<b>${esc(x.full_name)}</b> — ${esc(x.dgbo_id)}
+<input type=hidden name=id value="${x.id}">
+<select name=status><option>active</option><option>pending</option><option>approved</option><option>suspended</option></select>
+<select name=plan><option>free</option><option>pro</option><option>prime</option></select>
+<button>Update</button></form>`).join("")}</div>
+
+<div class=card><h2>Riders</h2>${(ri.data||[]).map(x=>`
+<form method=post action="/owner/rider">${esc(x.company||"Rider")} — ${esc(x.status)}
+<input type=hidden name=id value="${x.id}">
+<button name=status value=approved>Approve</button><button name=status value=rejected>Reject</button></form>`).join("")}</div>
+
+<div class=card><h2>Organizations</h2>${(o.data||[]).map(x=>`
+<form method=post action="/owner/org">${esc(x.name)} — ${esc(x.status)}
+<input type=hidden name=id value="${x.id}">
+<button name=status value=approved>Approve</button><button name=status value=rejected>Reject</button></form>`).join("")}</div>
+</main>`));
+});
+
+app.post("/owner/member",async(q,r)=>{await update("members",q.body.id,{status:q.body.status,plan:q.body.plan});r.redirect(`/owner?key=${encodeURIComponent(process.env.OWNER_KEY)}`)});
+app.post("/owner/rider",async(q,r)=>{await update("riders",q.body.id,{status:q.body.status});r.redirect(`/owner?key=${encodeURIComponent(process.env.OWNER_KEY)}`)});
+app.post("/owner/org",async(q,r)=>{await update("organizations",q.body.id,{status:q.body.status});r.redirect(`/owner?key=${encodeURIComponent(process.env.OWNER_KEY)}`)});
+
+/* WHATSAPP */
+
+app.post("/api/webhook/whatsapp",async(q,r)=>{
+ try{
+  let p=phone(q.body.From),text=String(q.body.Body||"").trim(),{data:u}=await byPhone(p);
+  let reply;
+  if(!u)reply=`👋 Karibu JR PHEEF!\n\nCreate your account:\nhttps://jr-pheef-marketplace.onrender.com/register`;
+  else{
+   let free=freeHours();
+   reply=free
+    ?`👋 ${u.full_name}\n\n🌙 JR PHEEF FREE HOURS are active until 6:00 AM.\n\nTell me naturally what you're looking for or what opportunity you have.`
+    :await need(u)
+      ?`👋 ${u.full_name}\n\nYou're active on JR PHEEF.\n\nTell me naturally what you need, what you're offering, or who/what you'd like to connect with.`
+      :`👋 ${u.full_name}\n\nYour JR PHEEF access has expired.\n\nActivate for KSh 30 and use JR PHEEF for 5 hours.\n\nFree access: 2:00 AM–6:00 AM.`;
+  if(text&&blocked.test(text))reply="🛡️ JR PHEEF protects members by blocking phone numbers, emails and external links.";
+  if(wa&&FROM&&q.body.From)console.log("WhatsApp message from",p,text);
+  r.type("text/xml").send(`<Response><Message>${esc(reply)}</Message></Response>`);
+ }catch(e){console.error(e);r.type("text/xml").send("<Response><Message>JR PHEEF is temporarily unavailable. Please try again.</Message></Response>")}
+});
+
+/* HEALTH */
+
+app.get("/health",(q,r)=>r.json({
+ ok:true,service:"JR PHEEF",database:"Supabase",listings:"jr_listings",
+ activation:"KSh30/5hours",free_hours:"02:00-06:00 EAT",
+ marketplace:true,connections:true,love:true,delivery:true,organizations:true,
+ brands:true,owner:true,whatsapp:!!wa
+}));
+
+app.listen(PORT,()=>console.log(
+`🚀 JR PHEEF running on ${PORT} | DB ${db?"CONNECTED":"CHECK ENV"} | KSh30/5H | FREE 02:00-06:00 | jr_listings | CONNECTIONS | MARKETPLACE | DELIVERY | ORGANIZATIONS | BRANDS | OWNER`
+));
