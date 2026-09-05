@@ -1,777 +1,661 @@
-`<main><div class=card><h2>Forgot password?</h2><p>Enter your registered phone and JR PHEEF will send a reset code on WhatsApp.</p><form method=post><input name=phone placeholder="07XXXXXXXX" required><button>Send reset code</button></form></div></main>`)));
+const express = require("express");
+const { createClient } = require("@supabase/supabase-js");
+const twilio = require("twilio");
 
-app.post("/forgot",async(req,r)=>{try{
- let p=phone(req.body.phone),u=await member(p);
- if(!u)return r.send("If that account exists, a reset code has been sent. <a href=/reset>Enter code</a>");
- let code=String(crypto.randomInt(100000,1000000));reset.set(p,{code,expires:Date.now()+600000});
- await send(p,`🔐 JR PHEEF password reset code: ${code}\n\nValid for 10 minutes. If you did not request this, ignore it.`);
- r.redirect(`/reset?phone=${encodeURIComponent(p)}`)
-}catch(e){console.error("FORGOT",e);r.status(500).send("Could not send reset code")}});
-
-app.get("/reset",req=>{}); // replaced below
-
-app.get("/reset",(req,r)=>r.send(page("Reset password",`<main><div class=card><h2>Reset password</h2><form method=post><input name=phone value="${esc(req.query.phone)}" placeholder="Phone" required><input name=code inputmode=numeric placeholder="6-digit code" required><input id=p name=password type=password placeholder="New password" required><input id=c name=confirm_password type=password placeholder="Confirm new password" required><label><input type=checkbox onclick="p.type=this.checked?'text':'password';c.type=this.checked?'text':'password'"> Show passwords</label><button>Reset password</button></form></div></main>`)));
-
-app.post("/reset",async(req,r)=>{try{
- let p=phone(req.body.phone),x=reset.get(p);
- if(!x||x.expires<Date.now()||x.code!==clean(req.body.code))return r.send("Invalid or expired reset code. <a href=/forgot>Request another</a>");
- if(req.body.password!==req.body.confirm_password)return r.send("Passwords do not match. <a href=/reset>Try again</a>");
- let{error}=await db.from("members").update({password_hash:hash(req.body.password)}).eq("phone",p);
- if(error)throw error;reset.delete(p);r.send("✅ Password reset successfully. <a href=/login>Sign in</a>")
-}catch(e){console.error("RESET",e);r.status(500).send("Password reset error")}});
-
-app.get("/home",async(req,r)=>{let{data:u}=await db.from("members").select("*").eq("id",req.query.id).maybeSingle();if(!u)return r.status(404).send("Member not found");r.send(page("JR PHEEF Home",`<header><h1>JR PHEEF</h1><p>${esc(u.full_name)} • ${esc(u.dgbo_id)}</p></header><main><div class=card><h2>🔎 FIND</h2><form action=/find><input name=item placeholder="What are you looking for?"><input name=location placeholder="Location"><input name=budget type=number placeholder="Maximum budget"><input type=hidden name=member value="${esc(u.id)}"><button>Find</button></form></div><div class=card><h2>📣 CREATE</h2><form action=/listing method=post><input type=hidden name=member value="${u.id}"><input name=item_name placeholder="Item / service / opportunity" required><input name=price type=number placeholder="Price" required><input name=location placeholder="Location" required><textarea name=description placeholder="Description"></textarea><button>Create</button></form></div><div class=card>DGBO ID: <b>${esc(u.dgbo_id)}</b><br>Rewards: KSh ${money(u.rewards)}<br>Credits: KSh ${money(u.credits)}<br><br>Marketplace access: <b>KSh 30 / 5 hours</b><br>Free daily: <b>02:00–06:00 EAT</b><br><a class=btn href="/deals?id=${u.id}">Deal Rooms</a><a class=btn href="/wallet?id=${u.id}">Wallet</a></div></main>`))});
-
-app.get("/find",async(req,r)=>{let m=await find(clean(req.query.item),clean(req.query.location),Number(req.query.budget)||null),cards=m.slice(0,20).map(x=>`<div class=card><b>${esc(x.item_name)}</b><br>KSh ${money(x.price)}<br>${esc(x.location)}<br>${esc(x.description||"")}<form method=post action=/match><input type=hidden name=listing_id value="${esc(x.id)}"><input type=hidden name=buyer value="${esc(req.query.member||"")}"><button>Connect</button></form></div>`).join("");r.send(page("Find",`<main><div class=card><h2>Matches</h2>${cards||"No matching opportunities yet."}</div></main>`))});
-
-app.post("/listing",async(req,r)=>{try{let{data:u}=await db.from("members").select("*").eq("id",req.body.member).maybeSingle();if(!u)return r.send("Member not found");let{error}=await db.from("jr_listings").insert({seller_name:u.full_name,phone:u.phone,item_name:clean(req.body.item_name),price:Number(req.body.price)||0,location:clean(req.body.location),description:clean(req.body.description),photos:[],status:"ACTIVE"});if(error)throw error;r.redirect(`/home?id=${u.id}`)}catch(e){console.error("LIST",e);r.status(500).send("Could not create opportunity: "+esc(e.message))}});
-
-app.post("/match",async(req,r)=>{try{let{data:l}=await db.from("jr_listings").select("*").eq("id",req.body.listing_id).single(),{data:u}=await db.from("members").select("*").eq("id",req.body.buyer).maybeSingle();if(!l||!u)return r.send("Match unavailable");let x=await room(l,u.phone);if(!x)return r.send("You cannot match your own opportunity.");try{await send(l.phone,`🎉 JR PHEEF MATCH FOUND!\n\n${l.item_name}\nKSh ${money(l.price)}\n📍 ${l.location}\n\n🔐 Secure Deal Room created.`)}catch(e){}r.redirect(`/deals?id=${u.id}`)}catch(e){console.error("MATCH",e);r.status(500).send("Match error")}});
-
-app.get("/deals",async(req,r)=>{let{data:u}=await db.from("members").select("*").eq("id",req.query.id).maybeSingle();if(!u)return r.send("Member not found");let rs=await rooms(u.phone),cards=rs.map(x=>{let l=x.jr_listings||{};return`<div class=card><b>${esc(l.item_name||"Opportunity")}</b><br>KSh ${money(l.price)} • ${esc(l.location||"")}<br>Status: ${esc(x.status)}<form method=post action=/message><input type=hidden name=room_id value="${esc(x.id)}"><input type=hidden name=phone value="${esc(u.phone)}"><input type=hidden name=member value="${esc(u.id)}"><input name=message placeholder="Type a normal message" required><button>Send</button></form></div>`}).join("")||"No active Deal Rooms.";r.send(page("Deal Rooms",`<main><div class=card><h2>🔐 Deal Rooms</h2>${cards}</div></main>`))});
-
-app.post("/message",async(req,r)=>{try{if(block.test(req.body.message))return r.send("For safety, JR PHEEF does not allow phone numbers, links, email or external contact details.");let{data:x}=await db.from("deal_rooms").select("*").eq("id",req.body.room_id).single(),p=phone(req.body.phone);if(!x||![phone(x.buyer_phone),phone(x.seller_phone)].includes(p))return r.send("Not authorised");let{error}=await db.from("messages").insert({room_id:x.id,sender_phone:p,message:clean(req.body.message)});if(error)throw error;let to=p===phone(x.buyer_phone)?x.seller_phone:x.buyer_phone;try{await send(to,`💬 JR PHEEF DEAL ROOM\n\n${clean(req.body.message)}`)}catch(e){}r.redirect(`/deals?id=${encodeURIComponent(req.body.member)}`)}catch(e){console.error("MESSAGE",e);r.status(500).send("Message error")}});
-
-app.get("/wallet",async(req,r)=>{let{data:u}=await db.from("members").select("*").eq("id",req.query.id).maybeSingle();r.send(page("Wallet",`<main><div class=card><h2>JR PHEEF Wallet</h2>Rewards: KSh ${money(u?.rewards)}<br>Credits: KSh ${money(u?.credits)}<br>Referrals: ${money(u?.referrals)}<br><br>Minimum individual withdrawal: KSh 200.</div></main>`))});
-
-app.post("/api/webhook/whatsapp",async(req,r)=>{try{
- let p=phone(req.body.From),text=clean(req.body.Body),u=await member(p),up=text.toUpperCase();
- if(!u)return r.type("text/xml").send(xml(`👋 Karibu JR PHEEF!\n\nCreate your account:\n${BASE}/register`));
- if(!text)return r.type("text/xml").send(xml(`👋 ${u.full_name}, tell me naturally what you need or what you have.`));
- if(up==="CHAT"){let rs=await rooms(p),x=rs[0],l=x?.jr_listings||{};return r.type("text/xml").send(xml(x?`🔐 DEAL ROOM\n\n${l.item_name||"Opportunity"}\nKSh ${money(l.price)}\n📍 ${l.location||""}\n\nType your message normally.`:"No active Deal Room yet."))}
- if(up.startsWith("FIND")){let a=text.split(/\n/).map(clean),m=await find(a[1],a[2],parseInt((a[3]||"").replace(/\D/g,""))||null),l=m.find(x=>phone(x.phone)!==p);if(!l)return r.type("text/xml").send(xml("😔 I have not found a match yet. I'll keep looking."));let x=await room(l,p);if(!x)return r.type("text/xml").send(xml("I could not create the secure Deal Room."));try{await send(l.phone,`🎉 JR PHEEF MATCH FOUND!\n\n${l.item_name}\nKSh ${money(l.price)}\n📍 ${l.location}\n\n🔐 Secure Deal Room created.`)}catch(e){}return r.type("text/xml").send(xml(`🎉 Match found!\n\n${l.item_name}\nKSh ${money(l.price)}\n📍 ${l.location}\n\n🔐 Secure Deal Room created.`))}
- if(up.startsWith("OPPORTUNITY")){let a=text.split(/\n/).map(clean),item=a[1],price=parseInt((a[2]||"").replace(/\D/g,"")),loc=a[3];if(!item||!price||!loc)return r.type("text/xml").send(xml("Send:\nOPPORTUNITY\nItem\nPrice\nLocation"));let{error}=await db.from("jr_listings").insert({seller_name:u.full_name,phone:p,item_name:item,price,location:loc,description:a.slice(4).join(" "),photos:[],status:"ACTIVE"});if(error)throw error;return r.type("text/xml").send(xml("✅ Opportunity listed. Send your photos and JR PHEEF will look for matches."))}
- let rs=await rooms(p);
- if(rs.length){let x=rs[0],other=p===phone(x.buyer_phone)?x.seller_phone:x.buyer_phone;if(block.test(text))return r.type("text/xml").send(xml("For safety, JR PHEEF does not allow phone numbers, links, email or external contact details."));await db.from("messages").insert({room_id:x.id,sender_phone:p,message:text});try{await send(other,`💬 JR PHEEF DEAL ROOM\n\n${text}`)}catch(e){}return r.type("text/xml").send(xml("☑️ Message sent through your secure Deal Room."))}
- return r.type("text/xml").send(xml(`👋 ${u.full_name}, tell me naturally what you need or what you have.`))
-}catch(e){console.error("WEBHOOK",e);return r.type("text/xml").send(xml("JR PHEEF is temporarily unavailable. Please try again."))}});
-
-app.get("/health",(_,r)=>r.json({ok:true,db:!!db,whatsapp:!!wa,listings:"jr_listings",access:"KSh 30 / 5 hours",free_window:"02:00-06:00 EAT",password_reset:true}));
-app.listen(PORT,()=>console.log(`🚀 JR PHEEF running on ${PORT} | DB ${db?"CONNECTED":"NOT CONNECTED"} | LISTINGS jr_listings | PASSWORD RESET ON`));
-const express=require("express"),crypto=require("crypto"),bcrypt=require("bcryptjs"),{createClient}=require("@supabase/supabase-js"),twilio=require("twilio");
-
-const app=express(),PORT=process.env.PORT||10000;
-const BASE=process.env.BASE_URL||"https://jr-pheef-marketplace.onrender.com";
-const KEY=process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY||process.env.SUPABASE_ANON_KEY;
-const db=process.env.SUPABASE_URL&&KEY?createClient(process.env.SUPABASE_URL,KEY):null;
-const tw=process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN?twilio(process.env.TWILIO_ACCOUNT_SID,process.env.TWILIO_AUTH_TOKEN):null;
-const FROM=process.env.TWILIO_WHATSAPP_NUMBER,TILL=process.env.JR_PHEEF_TILL||"9270365";
-const PASS_FEE=30,PASS_HOURS=5;
-
-app.use(express.urlencoded({extended:false}));
+const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-const clean=x=>String(x??"").trim();
-const esc=x=>clean(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-const money=x=>Number(x||0).toLocaleString("en-KE");
+const PORT = process.env.PORT || 10000;
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
-function phone(x){
-  let p=clean(x).replace(/^whatsapp:/i,"").replace(/[\s().-]/g,"");
-  if(/^254[17]\d{8}$/.test(p))p="+"+p;
-  if(/^0[17]\d{8}$/.test(p))p="+254"+p.slice(1);
-  return p;
-}
+const plans = {
+  free: { price: 0, match: 30 },
+  pro: { price: 99, match: 20 },
+  prime: { price: 149, match: 20 }
+};
 
-const hash=p=>crypto.scryptSync(clean(p),process.env.PASSWORD_SALT||"jr-pheef-v2",32).toString("hex");
-const sha=p=>crypto.createHash("sha256").update(clean(p)).digest("hex");
-const shaSalt=p=>crypto.createHash("sha256").update(clean(p)+(process.env.PASSWORD_SALT||"jr-pheef-v2")).digest("hex");
+const skills = [
+  "plumbing","electrical","construction","painting","carpentry",
+  "welding","cleaning","driving","moving","delivery","technology",
+  "software","it","graphic design","photography","video",
+  "marketing","sales","accounting","consulting","repair","installation"
+];
 
-async function passOK(p,h){
-  if(!h)return false;
-  if(h===hash(p)||h===sha(p)||h===shaSalt(p))return true;
-  if(/^\$2[aby]\$\d\d\$/.test(h)){
-    try{return await bcrypt.compare(clean(p),h)}catch{}
-  }
-  return false;
-}
+const uid = () =>
+  Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 
-async function member(v){
-  if(!db)return null;
-  const p=phone(v);
-  for(const x of [p,p.replace("+254","0"),p.replace("+","")]){
-    const r=await db.from("members").select("*").eq("phone",x).limit(1);
-    if(r.data?.[0])return r.data[0];
-  }
-  return null;
-}
+const phone = p => String(p || "").replace(/[^\d+]/g,"");
 
-async function send(to,msg){
-  if(!tw||!FROM)throw Error("TWILIO_NOT_CONFIGURED");
-  return tw.messages.create({
-    from:FROM,
-    to:`whatsapp:${phone(to)}`,
-    body:msg
-  });
-}
-
-const twiml=x=>`<Response><Message>${esc(x)}</Message></Response>`;
-
-function page(title,body){
- return `<!doctype html><html><head>
- <meta name="viewport" content="width=device-width,initial-scale=1">
- <title>${esc(title)}</title>
- <style>
- body{font-family:Arial;background:#f3f5f7;margin:0;padding:24px}
- main{max-width:520px;margin:auto;background:#fff;padding:24px;border-radius:18px;box-shadow:0 4px 20px #0001}
- input,button{width:100%;box-sizing:border-box;padding:13px;margin:7px 0;border:1px solid #ddd;border-radius:10px}
- button{background:#111;color:white;font-weight:bold}
- a{color:#111}
- </style></head><body><main>${body}</main></body></html>`;
-}
+const skillOf = text => {
+  text = String(text || "").toLowerCase();
+  return skills.find(s => text.includes(s)) || "other";
+};
 
 /* HOME */
 
-app.get("/",(q,r)=>r.send(page("JR PHEEF",`
+app.get("/", (req,res) => {
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JR PHEEF</title>
+<style>
+body{font-family:Arial;background:#08101f;color:white;padding:25px}
+.card{background:#151e32;padding:20px;margin:12px 0;border-radius:15px}
+h1{font-size:42px}
+button{padding:12px 18px;border:0;border-radius:8px}
+</style>
+</head>
+<body>
 <h1>JR PHEEF</h1>
-<p><b>Find. Match. Trade.</b></p>
-<p>One account. Find opportunities. Create opportunities. Connect.</p>
-<a href="/login">Login</a> · <a href="/signup">Create account</a>
-`)));
+<p>Find. Match. Trade.</p>
 
-/* REGISTRATION */
+<div class="card">
+<h2>MARKET</h2>
+<p>Buy and sell products and services.</p>
+</div>
 
-app.get("/signup",(q,r)=>r.send(page("Create account",`
-<h2>Create JR PHEEF account</h2>
-<form method="post">
-<input name="full_name" placeholder="Full name" required>
-<input name="birth_year" placeholder="Birth year" inputmode="numeric">
-<input name="phone" placeholder="07XXXXXXXX" required>
-<input name="password" type="password" placeholder="Password" required>
-<input name="confirm_password" type="password" placeholder="Confirm password" required>
-<button>Create account</button>
-</form>
-<p><a href="/login">Already have an account?</a></p>
-`)));
+<div class="card">
+<h2>WORK</h2>
+<p>Post a task. JR PHEEF finds the right skilled person, team or company.</p>
+</div>
 
-app.post("/signup",async(q,r)=>{
- try{
-  if(!db)return r.send("Database not configured.");
-  const b=q.body,p=phone(b.phone);
+<div class="card">
+<h2>DEAL ROOMS</h2>
+<p>CHAT • FILES • PAYMENT • ACTIVITY</p>
+</div>
 
-  if(clean(b.password)!==clean(b.confirm_password))
-   return r.send(page("Error","<h3>Passwords do not match.</h3><a href=/signup>Try again</a>"));
+<div class="card">
+<h2>JR PHEEF PAY</h2>
+<p>Payments • Rewards • Referrals • Coupons</p>
+</div>
 
-  if(await member(p))
-   return r.send(page("Account exists",
-   "<h3>This phone is already registered.</h3><a href=/login>Login</a> · <a href=/forgot>Reset password</a>"));
+<p>Powered by JR PHEEF</p>
+</body>
+</html>
+`);
+});
 
-  const c=await db.from("members").select("id",{count:"exact",head:true});
-  const dgbo=`DGBO-${String((c.count||0)+1).padStart(6,"0")}`;
+/* HEALTH */
 
-  const x=await db.from("members").insert([{
-   full_name:clean(b.full_name),
-   birth_year:clean(b.birth_year)||null,
-   phone:p,
-   password_hash:hash(b.password),
-   dgbo_id:dgbo,
-   verified:false,
-   status:"active",
-   plan:"free",
-   rewards:0,
-   credits:0,
-   referrals:0,
-   account_type:"individual"
-  }]).select().single();
+app.get("/health",(req,res)=>{
+  res.json({
+    ok:true,
+    service:"JR PHEEF",
+    status:"online",
+    time:new Date().toISOString()
+  });
+});
 
-  if(x.error)throw x.error;
+/* SIGN UP */
 
-  r.send(page("Welcome",`
-   <h2>✅ Account created</h2>
-   <p>Welcome ${esc(b.full_name)}.</p>
-   <p>Your DGBO ID:</p>
-   <h2>${esc(dgbo)}</h2>
-   <a href="/login">Login now</a>
-  `));
- }catch(e){
-  console.error("SIGNUP",e);
-  r.status(500).send("Registration error. Check Render logs.");
- }
+app.post("/api/signup",async(req,res)=>{
+  const {name,phone:rawPhone,password,birth_year,role="user"}=req.body;
+
+  if(!name||!rawPhone||!password)
+    return res.status(400).json({error:"Name, phone and password required"});
+
+  const user={
+    id:uid(),
+    name,
+    phone:phone(rawPhone),
+    password,
+    birth_year:birth_year||null,
+    role,
+    membership:"free",
+    credits:0,
+    rewards:0,
+    referral_code:"JRP-"+uid().slice(-5).toUpperCase(),
+    created_at:new Date().toISOString()
+  };
+
+  const {data,error}=await supabase
+    .from("members")
+    .insert(user)
+    .select()
+    .single();
+
+  if(error)
+    return res.status(400).json({error:error.message});
+
+  res.json({ok:true,user:data});
 });
 
 /* LOGIN */
 
-app.get("/login",(q,r)=>r.send(page("Login",`
-<h2>Login to JR PHEEF</h2>
-<form method="post">
-<input name="phone" placeholder="07XXXXXXXX or +254..." required>
-<input name="password" type="password" placeholder="Password" required>
-<button>Login</button>
-</form>
-<p><a href="/forgot">Forgot password?</a></p>
-`)));
+app.post("/api/login",async(req,res)=>{
+  const {phone:rawPhone,password}=req.body;
 
-app.post("/login",async(q,r)=>{
- try{
-  const u=await member(q.body.phone);
+  const {data,error}=await supabase
+    .from("members")
+    .select("*")
+    .eq("phone",phone(rawPhone))
+    .eq("password",password)
+    .single();
 
-  if(!u)
-   return r.send(page("Login failed",
-   "<h3>Account not found.</h3><a href=/signup>Create account</a>"));
+  if(error)
+    return res.status(401).json({error:"Invalid login"});
 
-  if(String(u.status||"active").toLowerCase()!=="active")
-   return r.send("This account is not active.");
-
-  const ok=await passOK(q.body.password,u.password_hash);
-
-  if(!ok)
-   return r.send(page("Login failed",
-   "<h3>Password is incorrect.</h3><a href=/forgot>Reset password</a>"));
-
-  /* Upgrade EVERY legacy password after successful login */
-  const nh=hash(q.body.password);
-  if(u.password_hash!==nh)
-   await db.from("members").update({password_hash:nh}).eq("id",u.id);
-
-  r.redirect(`/home?id=${encodeURIComponent(u.id)}`);
- }catch(e){
-  console.error("LOGIN",e);
-  r.status(500).send("Login error. Check Render logs.");
- }
+  res.json({ok:true,user:data});
 });
 
-/* FORGOT PASSWORD */
+/* LIST ITEM */
 
-app.get("/forgot",(q,r)=>r.send(page("Forgot password",`
-<h2>Reset password</h2>
-<p>Enter the phone number registered with JR PHEEF.</p>
-<p>Your OTP will be sent to you by WhatsApp.</p>
-<form method="post">
-<input name="phone" placeholder="07XXXXXXXX" required>
-<button>Send OTP</button>
-</form>
-<p><a href="/login">Back to login</a></p>
-`)));
+app.post("/api/listings",async(req,res)=>{
+  const {
+    user_id,title,description,price,location,category,
+    images=[]
+  }=req.body;
 
-app.post("/forgot",async(q,r)=>{
- try{
-  const p=phone(q.body.phone),u=await member(p);
+  if(!user_id||!title||!price)
+    return res.status(400).json({error:"Listing details required"});
 
-  if(!u)
-   return r.send(page("Reset",
-   "<h3>If that account exists, an OTP has been sent.</h3><a href=/login>Back</a>"));
+  if(Number(price)<=100)
+    return res.status(400).json({error:"Minimum price is above KSh 100"});
 
-  const code=String(crypto.randomInt(100000,1000000));
-  const expires=new Date(Date.now()+10*60*1000).toISOString();
+  if(images.length<3)
+    return res.status(400).json({error:"Add at least 3 photos"});
 
-  /* Invalidate old codes */
-  await db.from("password_resets")
-   .update({used:true})
-   .eq("phone",p)
-   .eq("used",false);
+  if(images.length>20)
+    return res.status(400).json({error:"Maximum 20 photos"});
 
-  const x=await db.from("password_resets").insert([{
-   phone:p,
-   code_hash:hash(code),
-   expires_at:expires,
-   used:false
-  }]);
+  const {data,error}=await supabase
+    .from("listings")
+    .insert({
+      id:uid(),
+      user_id,
+      title,
+      description,
+      price,
+      location,
+      category,
+      images,
+      status:"active",
+      created_at:new Date().toISOString()
+    })
+    .select()
+    .single();
 
-  if(x.error)throw x.error;
+  if(error)
+    return res.status(400).json({error:error.message});
 
-  await send(p,`🔐 JR PHEEF PASSWORD RESET
-
-Your OTP is: ${code}
-
-Valid for 10 minutes.
-
-Do not share this code with anyone.`);
-
-  /* THIS is the missing bridge */
-  r.redirect(`/reset?phone=${encodeURIComponent(p)}`);
-
- }catch(e){
-  console.error("FORGOT",e);
-  r.status(500).send(`
-   OTP could not be sent.
-   <br><br>
-   Check Twilio configuration and password_resets table.
-  `);
- }
+  res.json({ok:true,listing:data});
 });
 
-/* RESET PAGE */
+/* FIND */
 
-app.get("/reset",(q,r)=>{
- const p=phone(q.query.phone);
+app.get("/api/listings",async(req,res)=>{
+  const {q,category,location}=req.query;
 
- r.send(page("Reset password",`
- <h2>🔐 Reset your password</h2>
- <p>OTP sent to:</p>
- <b>${esc(p)}</b>
+  let query=supabase
+    .from("listings")
+    .select("*")
+    .eq("status","active")
+    .order("created_at",{ascending:false});
 
- <form method="post">
- <input type="hidden" name="phone" value="${esc(p)}">
+  if(category) query=query.ilike("category",`%${category}%`);
+  if(location) query=query.ilike("location",`%${location}%`);
+  if(q) query=query.or(
+    `title.ilike.%${q}%,description.ilike.%${q}%`
+  );
 
- <input name="code"
-  placeholder="6-digit OTP"
-  inputmode="numeric"
-  maxlength="6"
-  required>
+  const {data,error}=await query.limit(50);
 
- <input name="password"
-  type="password"
-  placeholder="New password"
-  required>
+  if(error)
+    return res.status(400).json({error:error.message});
 
- <input name="confirm_password"
-  type="password"
-  placeholder="Confirm new password"
-  required>
-
- <button>Reset Password</button>
- </form>
-
- <p><a href="/forgot">Request another OTP</a></p>
- `));
+  res.json(data);
 });
 
-/* RESET PASSWORD */
+/* WORK / TASKBRIDGE */
 
-app.post("/reset",async(q,r)=>{
- try{
-  const p=phone(q.body.phone);
+app.post("/api/work",async(req,res)=>{
+  const {
+    owner_id,title,description,location,budget,
+    urgency="normal",company_id=null
+  }=req.body;
 
-  if(clean(q.body.password)!==clean(q.body.confirm_password))
-   return r.send(page("Reset failed",
-   "<h3>Passwords do not match.</h3><a href=/reset?phone="+encodeURIComponent(p)+">Try again</a>"));
+  if(!owner_id||!title||!description)
+    return res.status(400).json({error:"Task details required"});
 
-  const x=await db.from("password_resets")
-   .select("*")
-   .eq("phone",p)
-   .eq("used",false)
-   .order("created_at",{ascending:false})
-   .limit(1)
-   .maybeSingle();
+  const skill=skillOf(title+" "+description);
 
-  const z=x.data;
+  const task={
+    id:uid(),
+    owner_id,
+    company_id,
+    title,
+    description,
+    location,
+    budget:budget||0,
+    urgency,
+    skill,
+    status:"ANALYZING",
+    created_at:new Date().toISOString()
+  };
 
-  if(!z)
-   return r.send(page("Reset failed",
-   "<h3>No active reset request.</h3><a href=/forgot>Request OTP</a>"));
+  const {data,error}=await supabase
+    .from("tasks")
+    .insert(task)
+    .select()
+    .single();
 
-  if(new Date(z.expires_at)<new Date())
-   return r.send(page("Reset failed",
-   "<h3>OTP expired.</h3><a href=/forgot>Request a new OTP</a>"));
+  if(error)
+    return res.status(400).json({error:error.message});
 
-  if(!(await passOK(q.body.code,z.code_hash)))
-   return r.send(page("Reset failed",
-   "<h3>Invalid OTP.</h3><a href=/reset?phone="+encodeURIComponent(p)+">Try again</a>"));
+  const workers=await supabase
+    .from("workers")
+    .select("*")
+    .eq("status","available")
+    .ilike("skills",`%${skill}%`)
+    .limit(20);
 
-  const u=await member(p);
+  await supabase
+    .from("tasks")
+    .update({
+      status:workers.data?.length?"ROUTED":"SUBMITTED"
+    })
+    .eq("id",task.id);
 
-  if(!u)return r.send("Account not found.");
-
-  const a=await db.from("members")
-   .update({password_hash:hash(q.body.password)})
-   .eq("id",u.id);
-
-  if(a.error)throw a.error;
-
-  await db.from("password_resets")
-   .update({used:true})
-   .eq("id",z.id);
-
-  r.send(page("Password changed",`
-   <h2>✅ Password changed</h2>
-   <p>Your JR PHEEF password has been successfully reset.</p>
-   <a href="/login">Login now</a>
-  `));
-
- }catch(e){
-  console.error("RESET",e);
-  r.status(500).send("Password reset error. Check Render logs.");
- }
+  res.json({
+    ok:true,
+    task:data,
+    skill,
+    matched_workers:workers.data?.length||0,
+    workers:workers.data||[]
+  });
 });
 
-/* ACCESS MODEL */
+/* WORKER */
 
-function freeWindow(){
- const h=Number(new Intl.DateTimeFormat("en-KE",{
-  timeZone:"Africa/Nairobi",
-  hour:"2-digit",
-  hour12:false
- }).format(new Date()));
- return h>=2&&h<6;
-}
+app.post("/api/workers",async(req,res)=>{
+  const {
+    user_id,skills,location,experience,
+    availability="available"
+  }=req.body;
 
-async function activePass(p){
- if(!db)return false;
+  if(!user_id||!skills)
+    return res.status(400).json({error:"Worker details required"});
 
- const x=await db.from("access_passes")
-  .select("*")
-  .eq("phone",p)
-  .eq("status","active")
-  .gt("expires_at",new Date().toISOString())
-  .order("expires_at",{ascending:false})
-  .limit(1);
+  const {data,error}=await supabase
+    .from("workers")
+    .insert({
+      id:uid(),
+      user_id,
+      skills:Array.isArray(skills)?skills.join(","):skills,
+      location,
+      experience,
+      status:availability,
+      rating:0,
+      jobs:0,
+      created_at:new Date().toISOString()
+    })
+    .select()
+    .single();
 
- return !!x.data?.[0];
-}
+  if(error)
+    return res.status(400).json({error:error.message});
 
-async function canUse(p){
- return freeWindow()||await activePass(p);
-}
-
-app.post("/access",async(q,r)=>{
- try{
-  const p=phone(q.body.phone);
-
-  if(freeWindow())
-   return r.send(page("JR PHEEF",`
-    <h2>🟢 FREE ACCESS</h2>
-    <p>Everything is free right now.</p>
-    <p>Free period: <b>2:00 AM – 6:00 AM EAT</b></p>
-    <a href="/home?id=${encodeURIComponent((await member(p)).id)}">Continue</a>
-   `));
-
-  const u=await member(p);
-  if(!u)return r.send("Member not found.");
-
-  const existing=await db.from("access_passes")
-   .select("*")
-   .eq("phone",p)
-   .eq("status","pending")
-   .limit(1);
-
-  if(!existing.data?.length){
-   const x=await db.from("access_passes").insert([{
-    member_id:String(u.id),
-    phone:p,
-    amount:PASS_FEE,
-    hours:PASS_HOURS,
-    status:"pending"
-   }]);
-
-   if(x.error)throw x.error;
-  }
-
-  r.send(page("Activate access",`
-   <h2>🔐 Activate JR PHEEF</h2>
-   <p><b>KSh ${PASS_FEE}</b> gives you <b>${PASS_HOURS} hours</b> of marketplace access.</p>
-   <p>Pay to JR PHEEF Till:</p>
-   <h2>${TILL}</h2>
-   <p><b>Current status: PAYMENT PENDING</b></p>
-   <p>Automatic activation will happen when the M-Pesa payment callback is connected.</p>
-   <p>🕑 From 2:00 AM–6:00 AM EAT, everything is free.</p>
-   <a href="/home?id=${encodeURIComponent(u.id)}">Back to JR PHEEF</a>
-  `));
-
- }catch(e){
-  console.error("ACCESS",e);
-  r.status(500).send("Access error. Check Render logs.");
- }
+  res.json({ok:true,worker:data});
 });
 
-/* MEMBER HOME */
+/* ACCEPT TASK */
 
-app.get("/home",async(q,r)=>{
- try{
-  const u=await member(q.query.id);
-  if(!u)return r.send("Member not found.");
+app.post("/api/work/:id/accept",async(req,res)=>{
+  const {worker_id}=req.body;
 
-  const free=freeWindow();
-  const active=await activePass(u.phone);
+  const {data,error}=await supabase
+    .from("tasks")
+    .update({
+      worker_id,
+      status:"ACCEPTED"
+    })
+    .eq("id",req.params.id)
+    .select()
+    .single();
 
-  r.send(page("JR PHEEF",`
-   <h1>JR PHEEF</h1>
-   <p>Welcome, <b>${esc(u.full_name)}</b></p>
+  if(error)
+    return res.status(400).json({error:error.message});
 
-   <p>DGBO ID: <b>${esc(u.dgbo_id)}</b></p>
-
-   <hr>
-
-   <h3>FIND · CREATE · MATCH · CONNECT</h3>
-
-   <p>
-   ${free
-    ?"🟢 Everything is FREE right now."
-    :active
-     ?"🟢 Marketplace access ACTIVE."
-     :"🔒 Marketplace access requires KSh 30 / 5 hours."}
-   </p>
-
-   ${free||active
-    ?"<button disabled>Marketplace Access Active</button>"
-    :`<form method="post" action="/access">
-      <input type="hidden" name="phone" value="${esc(u.phone)}">
-      <button>Activate 5 Hours — KSh 30</button>
-      </form>`}
-
-   <hr>
-
-   <p>🤝 Social/friendship connections: <b>FREE</b></p>
-   <p>📣 Create marketplace opportunities: <b>FREE</b></p>
-   <p>🔐 Deal Rooms protect contact details.</p>
-   <p>🎁 Rewards · Referrals · Coupons</p>
-   <p>🚚 JR PHEEF approved rider network</p>
-
-   <hr>
-
-   <a href="/login">Log out</a>
-  `));
-
- }catch(e){
-  console.error("HOME",e);
-  r.status(500).send("Home error.");
- }
+  res.json({ok:true,task:data});
 });
 
-/* MARKETPLACE */
+/* TASK STATUS */
 
-async function find(item,loc,budget){
- let q=db.from("jr_listings")
-  .select("*")
-  .eq("status","ACTIVE");
+app.post("/api/work/:id/status",async(req,res)=>{
+  const allowed=[
+    "IN PROGRESS",
+    "SUBMITTED FOR VERIFICATION",
+    "VERIFIED",
+    "PAYMENT",
+    "COMPLETED",
+    "CANCELLED",
+    "DISPUTED",
+    "REASSIGNED"
+  ];
 
- if(item)q=q.ilike("item_name",`%${item}%`);
- if(loc)q=q.ilike("location",`%${loc}%`);
- if(budget)q=q.lte("price",budget);
+  if(!allowed.includes(req.body.status))
+    return res.status(400).json({error:"Invalid status"});
 
- const x=await q.order("created_at",{ascending:false});
+  const {data,error}=await supabase
+    .from("tasks")
+    .update({status:req.body.status})
+    .eq("id",req.params.id)
+    .select()
+    .single();
 
- if(x.error)console.error("FIND",x.error);
+  if(error)
+    return res.status(400).json({error:error.message});
 
- return x.data||[];
-}
+  res.json({ok:true,task:data});
+});
 
-async function roomFor(listing,buyer){
- if(listing.phone===buyer)return null;
+/* DEAL ROOM */
 
- const old=await db.from("deal_rooms")
-  .select("*")
-  .eq("listing_id",listing.id)
-  .eq("buyer_phone",buyer)
-  .in("status",["negotiating","agreed","paid"])
-  .order("created_at",{ascending:false})
-  .limit(1);
+app.post("/api/dealrooms",async(req,res)=>{
+  const {
+    buyer_id,seller_id,listing_id=null,task_id=null
+  }=req.body;
 
- if(old.data?.[0])return old.data[0];
+  const {data,error}=await supabase
+    .from("deal_rooms")
+    .insert({
+      id:uid(),
+      buyer_id,
+      seller_id,
+      listing_id,
+      task_id,
+      status:"OPEN",
+      created_at:new Date().toISOString()
+    })
+    .select()
+    .single();
 
- const x=await db.from("deal_rooms").insert([{
-  listing_id:listing.id,
-  buyer_phone:buyer,
-  seller_phone:listing.phone,
-  status:"negotiating",
-  buyer_paid:false,
-  seller_paid:false,
-  buyer_agreed:false,
-  seller_agreed:false
- }]).select().single();
+  if(error)
+    return res.status(400).json({error:error.message});
 
- if(x.error)console.error("ROOM",x.error);
+  res.json({ok:true,room:data});
+});
 
- return x.data;
-}
+/* CHAT */
 
-async function rooms(p){
- const x=await db.from("deal_rooms")
-  .select("*,jr_listings(item_name,price,location,photos)")
-  .or(`buyer_phone.eq.${p},seller_phone.eq.${p}`)
-  .in("status",["negotiating","agreed","paid"])
-  .order("created_at",{ascending:false});
+app.post("/api/dealrooms/:id/chat",async(req,res)=>{
+  const {sender_id,message}=req.body;
 
- if(x.error)console.error("ROOMS",x.error);
+  if(!sender_id||!message)
+    return res.status(400).json({error:"Message required"});
 
- return x.data||[];
-}
+  if(/(?:\+?254|0)?7\d{8}/.test(message))
+    return res.status(400).json({
+      error:"Phone numbers are protected until connection is completed."
+    });
+
+  const {data,error}=await supabase
+    .from("messages")
+    .insert({
+      id:uid(),
+      room_id:req.params.id,
+      sender_id,
+      message,
+      created_at:new Date().toISOString()
+    })
+    .select()
+    .single();
+
+  if(error)
+    return res.status(400).json({error:error.message});
+
+  res.json({ok:true,message:data});
+});
+
+/* PAYMENT */
+
+app.post("/api/pay",async(req,res)=>{
+  const {user_id,room_id,amount,type="connection"}=req.body;
+
+  if(!user_id||!room_id||!amount)
+    return res.status(400).json({error:"Payment details required"});
+
+  const {data,error}=await supabase
+    .from("payments")
+    .insert({
+      id:uid(),
+      user_id,
+      room_id,
+      amount,
+      type,
+      status:"PAID",
+      created_at:new Date().toISOString()
+    })
+    .select()
+    .single();
+
+  if(error)
+    return res.status(400).json({error:error.message});
+
+  res.json({ok:true,payment:data});
+});
+
+/* MEMBERSHIP */
+
+app.post("/api/membership",async(req,res)=>{
+  const {user_id,plan}=req.body;
+
+  if(!plans[plan])
+    return res.status(400).json({error:"Invalid plan"});
+
+  const {data,error}=await supabase
+    .from("members")
+    .update({membership:plan})
+    .eq("id",user_id)
+    .select()
+    .single();
+
+  if(error)
+    return res.status(400).json({error:error.message});
+
+  res.json({
+    ok:true,
+    user:data,
+    price:plans[plan].price,
+    match_fee:plans[plan].match
+  });
+});
+
+/* REFERRAL */
+
+app.post("/api/referral",async(req,res)=>{
+  const {user_id,referral_code}=req.body;
+
+  const ref=await supabase
+    .from("members")
+    .select("id")
+    .eq("referral_code",referral_code)
+    .single();
+
+  if(ref.error)
+    return res.status(404).json({error:"Referral code not found"});
+
+  if(ref.data.id===user_id)
+    return res.status(400).json({error:"Cannot refer yourself"});
+
+  const {error}=await supabase
+    .from("members")
+    .update({referred_by:ref.data.id})
+    .eq("id",user_id);
+
+  if(error)
+    return res.status(400).json({error:error.message});
+
+  res.json({ok:true,message:"Referral connected"});
+});
+
+/* COUPON */
+
+app.post("/api/coupon",async(req,res)=>{
+  const {code}=req.body;
+
+  const {data,error}=await supabase
+    .from("coupons")
+    .select("*")
+    .eq("code",String(code).toUpperCase())
+    .eq("active",true)
+    .single();
+
+  if(error)
+    return res.status(404).json({error:"Coupon not found"});
+
+  res.json({ok:true,coupon:data});
+});
 
 /* WHATSAPP */
 
-app.post("/api/webhook/whatsapp",async(q,r)=>{
- try{
-  const text=clean(q.body.Body);
-  const p=phone(q.body.From);
-  const u=await member(p);
-  const up=text.toUpperCase();
+app.post("/api/webhook/whatsapp",(req,res)=>{
+  const body=String(req.body.Body||"").trim().toLowerCase();
 
-  console.log("📩 JR PHEEF",p,text);
+  let reply;
 
-  if(!u)
-   return r.type("text/xml").send(twiml(
-    `🔐 Please create your JR PHEEF account first.\n\n${BASE}/signup`
-   ));
+  if(body.includes("buy"))
+    reply="🔥 JR PHEEF\nSend what you want + location + budget.";
 
-  if(!text)
-   return r.type("text/xml").send(twiml(
-    "👋 Tell me naturally what you are looking for or what you have."
-   ));
+  else if(body.includes("sell"))
+    reply="🔥 JR PHEEF SELL\nSend item, price, location and at least 3 photos.";
 
-  /* FREE SOCIAL / GENERAL */
-  if(/^(HI|HELLO|HEY|START|MENU)$/i.test(text))
-   return r.type("text/xml").send(twiml(
-    "👋 Welcome to JR PHEEF.\n\nTell me naturally what you need or what you have.\n\nYou can use English, Sheng or mix both."
-   ));
+  else if(
+    body.includes("work")||
+    body.includes("job")||
+    body.includes("task")
+  )
+    reply="🛠️ JR PHEEF WORK\nTell me the task, location, budget and urgency.";
 
-  /* MARKETPLACE ACCESS */
-  if(!await canUse(p))
-   return r.type("text/xml").send(twiml(
-    `🔒 JR PHEEF marketplace access is KSh ${PASS_FEE} for ${PASS_HOURS} hours.\n\n🕑 Free access: 2am–6am EAT.\n\nActivate at:\n${BASE}/home?id=${u.id}\n\n🤝 Social connection remains FREE.`
-   ));
+  else
+    reply=
+`👋 Welcome to JR PHEEF.
 
-  /* DEAL ROOMS */
-  const rs=await rooms(p);
+BUY — find something
+SELL — list something
+WORK — find skilled help
 
-  if(/^DEALS$/i.test(up)){
-   if(!rs.length)
-    return r.type("text/xml").send(twiml("📂 You have no active Deal Rooms."));
+Find. Match. Trade.`;
 
-   return r.type("text/xml").send(twiml(
-    rs.map((x,i)=>
-     `${i+1}. ${x.jr_listings?.item_name||"Item"} — KSh ${money(x.jr_listings?.price)}\nReply CHAT ${i+1}`
-    ).join("\n\n")
-   ));
-  }
+  const twiml=new twilio.twiml.MessagingResponse();
+  twiml.message(reply);
 
-  if(/^CHAT\b/i.test(text)){
-   const n=text.match(/^CHAT\s*(\d+)?/i)?.[1];
-   const room=n?rs[Number(n)-1]:rs[0];
-
-   if(!room)
-    return r.type("text/xml").send(twiml("🔐 You have no active Deal Room."));
-
-   const msg=text.replace(/^CHAT\s*\d*/i,"").trim();
-
-   if(!msg)
-    return r.type("text/xml").send(twiml(
-     `🔐 JR PHEEF DEAL ROOM\n\n${room.jr_listings?.item_name||"Item"}\n\n💬 Type your message normally.`
-    ));
-
-   const other=p===room.buyer_phone?room.seller_phone:room.buyer_phone;
-
-   await db.from("messages").insert([{
-    room_id:room.id,
-    sender_phone:p,
-    message:msg
-   }]);
-
-   try{
-    await send(other,`💬 JR PHEEF DEAL ROOM\n\n${msg}\n\nReply CHAT to continue.`);
-   }catch(e){
-    console.error("CHAT SEND",e);
-   }
-
-   return r.type("text/xml").send(twiml(
-    "☑ Message sent securely. Your contact details remain protected."
-   ));
-  }
-
-  /* FIND */
-  if(/^FIND\b/i.test(text)||/^(looking for|need|natafuta|natafut)\b/i.test(text)){
-   const item=text.replace(/^(FIND|looking for|need|natafuta|natafut)\s*/i,"").split("\n")[0].trim();
-
-   if(!item)
-    return r.type("text/xml").send(twiml(
-     "🔎 Tell me what you are looking for.\nExample: Natafuta Toyota Axio Nairobi."
-    ));
-
-   const matches=await find(item,"",null);
-   const listing=matches.find(x=>x.phone!==p);
-
-   if(!listing)
-    return r.type("text/xml").send(twiml(
-     "😔 I haven't found a matching opportunity yet. I'll keep looking."
-    ));
-
-   const room=await roomFor(listing,p);
-
-   if(!room)
-    return r.type("text/xml").send(twiml(
-     "I found a match but could not create the secure Deal Room."
-    ));
-
-   try{
-    await send(listing.phone,
-     `🎉 JR PHEEF MATCH\n\n${listing.item_name}\n💰 KSh ${money(listing.price)}\n📍 ${listing.location}\n\n🔐 Secure Deal Room ready.\nReply CHAT.`
-    );
-   }catch(e){
-    console.error("MATCH NOTICE",e);
-   }
-
-   return r.type("text/xml").send(twiml(
-    `🎉 I found a match!\n\n${listing.item_name}\n💰 KSh ${money(listing.price)}\n📍 ${listing.location}\n\n🔐 Secure Deal Room created.\n\nReply CHAT to start talking.`
-   ));
-  }
-
-  /* CREATE */
-  if(/^OPPORTUNITY\b/i.test(text)||/\b(nauza|selling|i have)\b/i.test(text)){
-   const l=text.split("\n").map(clean);
-   const item=l[1]||"";
-   const price=parseInt((l[2]||"").replace(/[^0-9]/g,""),10)||0;
-   const loc=l[3]||"";
-
-   if(!item||!price||!loc)
-    return r.type("text/xml").send(twiml(
-     "📣 Create an opportunity with:\n\nOPPORTUNITY\nItem\nPrice\nLocation\n\nThen send your photos."
-    ));
-
-   const x=await db.from("jr_listings").insert([{
-    seller_name:u.full_name,
-    phone:p,
-    item_name:item,
-    price,
-    location:loc,
-    status:"ACTIVE",
-    photos:[]
-   }]).select().single();
-
-   if(x.error){
-    console.error("LIST",x.error);
-    return r.type("text/xml").send(twiml(
-     "I couldn't save that opportunity."
-    ));
-   }
-
-   return r.type("text/xml").send(twiml(
-    `✅ Opportunity created.\n\n${item}\n💰 KSh ${money(price)}\n📍 ${loc}\n\nSend your photos together.`
-   ));
-  }
-
-  /* NORMAL CONVERSATION INSIDE AN ACTIVE ROOM */
-  if(rs[0]){
-   const room=rs[0];
-   const other=p===room.buyer_phone?room.seller_phone:room.buyer_phone;
-
-   await db.from("messages").insert([{
-    room_id:room.id,
-    sender_phone:p,
-    message:text
-   }]);
-
-   try{
-    await send(other,`💬 JR PHEEF DEAL ROOM\n\n${text}`);
-   }catch(e){
-    console.error("NORMAL CHAT",e);
-   }
-
-   return r.type("text/xml").send(twiml(
-    "☑️ Message sent through your secure Deal Room."
-   ));
-  }
-
-  return r.type("text/xml").send(twiml(
-   "Tell me naturally what you are looking for or what you have."
-  ));
-
- }catch(e){
-  console.error("🔥 WEBHOOK",e);
-  return r.type("text/xml").send(twiml(
-   "❌ JR PHEEF had a problem. Please try again."
-  ));
- }
+  res.type("text/xml").send(twiml.toString());
 });
 
-/* HEALTH CHECK */
+/* DASHBOARD */
 
-app.get("/health",(q,r)=>r.json({
- ok:true,
- db:!!db,
- twilio:!!tw&&!!FROM,
- listings:"jr_listings",
- access:"KSh 30 / 5 hours",
- free_window:"02:00-06:00 EAT",
- password_reset:"database OTP"
-}));
+app.get("/dashboard/:id",async(req,res)=>{
+  const {data,error}=await supabase
+    .from("members")
+    .select("*")
+    .eq("id",req.params.id)
+    .single();
 
-app.listen(PORT,()=>console.log(
- `🚀 JR PHEEF ${PORT} | DB ${db?"CONNECTED":"MISSING"} | jr_listings | PASSWORD RESET DB | KSh ${PASS_FEE}/${PASS_HOURS}h | FREE 02-06 EAT`
-));
+  if(error)
+    return res.status(404).send("User not found");
+
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JR PHEEF Dashboard</title>
+<style>
+body{font-family:Arial;background:#08101f;color:white;padding:20px}
+.box{background:#151e32;padding:18px;margin:10px 0;border-radius:14px}
+</style>
+</head>
+<body>
+
+<h1>JR PHEEF</h1>
+<p>Welcome, ${data.name}</p>
+
+<div class="box">
+<b>MARKET</b><br>
+Find • Buy • Sell
+</div>
+
+<div class="box">
+<b>WORK</b><br>
+Post Tasks • Find Workers • Manage Jobs
+</div>
+
+<div class="box">
+<b>DEAL ROOMS</b><br>
+Chat • Files • Payment • Activity
+</div>
+
+<div class="box">
+<b>JR PHEEF PAY</b><br>
+Payments • Credits • Rewards
+</div>
+
+<div class="box">
+<b>REWARDS</b><br>
+Credits: KSh ${data.credits||0}<br>
+Rewards: KSh ${data.rewards||0}<br>
+Minimum withdrawal: KSh 200
+</div>
+
+<div class="box">
+<b>REFERRAL</b><br>
+${data.referral_code}
+</div>
+
+<div class="box">
+<b>MEMBERSHIP</b><br>
+${String(data.membership||"free").toUpperCase()}
+</div>
+
+<div class="box">
+<b>DELIVERY</b><br>
+Riders • Movers • Delivery Partners
+</div>
+
+</body>
+</html>
+`);
+});
+
+/* OWNER */
+
+app.get("/owner",async(req,res)=>{
+  if(req.query.key!==process.env.OWNER_KEY)
+    return res.status(403).send("Forbidden");
+
+  const members=await supabase
+    .from("members")
+    .select("id,name,phone,membership,created_at")
+    .order("created_at",{ascending:false})
+    .limit(100);
+
+  const listings=await supabase
+    .from("listings")
+    .select("*")
+    .order("created_at",{ascending:false})
+    .limit(100);
+
+  const tasks=await supabase
+    .from("tasks")
+    .select("*")
+    .order("created_at",{ascending:false})
+    .limit(100);
+
+  res.json({
+    platform:"JR PHEEF",
+    members:members.data||[],
+    listings:listings.data||[],
+    tasks:tasks.data||[]
+  });
+});
+
+app.listen(PORT,()=>{
+  console.log(`JR PHEEF running on port ${PORT}`);
+});
