@@ -1,6 +1,7 @@
 {
   "name": "jr-pheef-marketplace",
-  "version": "3.0.0",
+  "version": "1.0.0",
+  "description": "JR PHEEF - Find. Match. Trade.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -8,8 +9,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
     "express": "^5.1.0",
-    "multer": "^2.0.2",
-    "twilio": "^5.10.2"
+    "twilio": "^5.10.2",
+    "bcryptjs": "^3.0.2"
   }
 } 
-"bcryptjs": "^3.0.2"
