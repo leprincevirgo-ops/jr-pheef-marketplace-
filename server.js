@@ -14,6 +14,11 @@ const block=/(\+?\d[\d\s().-]{7,}|\b\d{9,13}\b|https?:\/\/|www\.|\.com\b|\.co\.k
 const xml=x=>`<Response><Message>${esc(x)}</Message></Response>`;
 const send=(to,body)=>wa&&FROM?wa.messages.create({from:FROM,to:`whatsapp:${phone(to)}`,body}):null;
 
+// In-memory store for password reset codes: phone -> {code, expires}
+const resetCodes=new Map();
+const genCode=()=>String(Math.floor(100000+Math.random()*900000));
+function cleanupCodes(){let now=Date.now();for(let[k,v]of resetCodes)if(v.expires<now)resetCodes.delete(k)}
+
 async function member(p){
  if(!db)return null;
  let q=phone(p),{data}=await db.from("members").select("*").eq("phone",q).maybeSingle();
@@ -74,101 +79,7 @@ app.get("/register",(_,r)=>r.send(page("Register",`<main><div class=card><h2>Cre
 <input name=phone placeholder="07XXXXXXXX" required><input name=birth_year type=number placeholder="Birth year" required>
 <input id=p name=password type=password placeholder="Password" required>
 <label><input type=checkbox onclick="p.type=this.checked?'text':'password'"> Show password</label>
-<button>Create account</button></form></div></main>`)));
-
-app.post("/register",async(req,r)=>{
- try{
-  if(!db)return r.send("Database not connected");
-  let p=phone(req.body.phone);
-  if(await member(p))return r.send("Account already exists. <a href=/login>Sign in</a>");
-  let id=await dgbo(),{data,error}=await db.from("members").insert({
-   dgbo_id:id,full_name:clean(req.body.full_name),phone:p,birth_year:req.body.birth_year,
-   password_hash:hash(req.body.password),reputation:0,rewards:0,credits:0,referrals:0,
-   plan:"free",theme:"green",verified:false,status:"active",account_type:"individual"
-  }).select().single();
-  if(error)throw error;
-  r.redirect(`/home?id=${data.id}`);
- }catch(e){console.error(e);r.status(500).send("Registration error: "+esc(e.message))}
-});
-
-app.get("/login",(_,r)=>r.send(page("Login",`<main><div class=card><h2>Sign in</h2>
-<form method=post><input name=phone placeholder="Phone" required>
-<input id=p name=password type=password placeholder="Password" required>
-<label><input type=checkbox onclick="p.type=this.checked?'text':'password'"> Show password</label>
-<button>Sign in</button></form></div></main>`)));
-
-app.post("/login",async(req,r)=>{
- try{
-  let u=await member(req.body.phone);
-  if(!u||!u.password_hash||u.password_hash!==hash(req.body.password))
-   return r.send("Incorrect phone or password. <a href=/login>Try again</a>");
-  r.redirect(`/home?id=${u.id}`);
- }catch(e){console.error(e);r.status(500).send("Login error")}
-});
-
-app.get("/home",async(req,r)=>{
- let{data:u}=await db.from("members").select("*").eq("id",req.query.id).maybeSingle();
- if(!u)return r.status(404).send("Member not found");
- r.send(page("JR PHEEF Home",`<header><h1>JR PHEEF</h1><p>${esc(u.full_name)} • ${esc(u.dgbo_id)}</p></header><main>
- <div class=card><h2>🔎 FIND</h2><form action=/find>
- <input name=item placeholder="What are you looking for?"><input name=location placeholder="Location">
- <input name=budget type=number placeholder="Maximum budget"><input type=hidden name=member value="${u.id}">
- <button>Find</button></form></div>
- <div class=card><h2>📣 CREATE</h2><form action=/listing method=post>
- <input type=hidden name=member value="${u.id}"><input name=item_name placeholder="Item / service / opportunity" required>
- <input name=price type=number placeholder="Price" required><input name=location placeholder="Location" required>
- <textarea name=description placeholder="Description"></textarea><button>Create</button></form></div>
- <div class=card><b>DGBO ID:</b> ${esc(u.dgbo_id)}<br><b>Rewards:</b> KSh ${money(u.rewards)}<br>
- <b>Credits:</b> KSh ${money(u.credits)}<br><br>
- Access: <b>KSh 30 / 5 hours</b><br>Free daily: <b>02:00–06:00 EAT</b><br>
- <a class=btn href="/deals?id=${u.id}">Deal Rooms</a>
- <a class=btn href="/wallet?id=${u.id}">Wallet</a></div></main>`));
-});
-
-app.get("/find",async(req,r)=>{
- let m=await find(clean(req.query.item),clean(req.query.location),Number(req.query.budget)||null);
- let cards=m.slice(0,20).map(x=>`<div class=card><b>${esc(x.item_name)}</b><br>
- KSh ${money(x.price)}<br>${esc(x.location)}<br>${esc(x.description||"")}
- <form method=post action=/match><input type=hidden name=listing_id value="${esc(x.id)}">
- <input type=hidden name=buyer value="${esc(req.query.member||"")}"><button>Connect</button></form></div>`).join("");
- r.send(page("Find",`<main><div class=card><h2>Matches</h2>${cards||"No matching opportunities yet."}</div></main>`));
-});
-
-app.post("/listing",async(req,r)=>{
- try{
-  let{data:u}=await db.from("members").select("*").eq("id",req.body.member).maybeSingle();
-  if(!u)return r.send("Member not found");
-  let{error}=await db.from("jr_listings").insert({
-   seller_name:u.full_name,phone:u.phone,item_name:clean(req.body.item_name),
-   price:Number(req.body.price)||0,location:clean(req.body.location),
-   description:clean(req.body.description),photos:[],status:"ACTIVE"
-  });
-  if(error)throw error;
-  r.redirect(`/home?id=${u.id}`);
- }catch(e){console.error(e);r.status(500).send("Could not create opportunity: "+esc(e.message))}
-});
-
-app.post("/match",async(req,r)=>{
- try{
-  let{data:l}=await db.from("jr_listings").select("*").eq("id",req.body.listing_id).single();
-  let{data:u}=await db.from("members").select("*").eq("id",req.body.buyer).maybeSingle();
-  if(!l||!u)return r.send("Match unavailable");
-  let room=await makeRoom(l,u.phone);
-  if(!room)return r.send("You cannot match your own opportunity.");
-  try{await send(l.phone,`🎉 JR PHEEF MATCH FOUND!\n\n${l.item_name}\nKSh ${money(l.price)}\n📍 ${l.location}\n\n🔐 Secure Deal Room created.`)}catch(e){console.error("NOTICE",e)}
-  r.redirect(`/deals?id=${u.id}`);
- }catch(e){console.error(e);r.status(500).send("Match error")}
-});
-
-app.get("/deals",async(req,r)=>{
- let{data:u}=await db.from("members").select("*").eq("id",req.query.id).maybeSingle();
- if(!u)return r.send("Member not found");
- let rs=await rooms(u.phone);
- let cards=rs.map(x=>{let l=x.jr_listings||{};return`<div class=card><b>${esc(l.item_name||"Opportunity")}</b><br>
- KSh ${money(l.price)} • ${esc(l.location||"")}<br>Status: ${esc(x.status)}
- <form method=post action=/message><input type=hidden name=room_id value="${esc(x.id)}">
- <input type=hidden name=phone value="${esc(u.phone)}"><input type=hidden name=member value="${esc(u.id)}">
- <input name=message placeholder="Type a normal message" required><button>Send</button></form></div>`}).join("")||"No active Deal Rooms.";
+<button>Create account</button></form></div></main>`)));ctive Deal Rooms.";
  r.send(page("Deal Rooms",`<main><div class=card><h2>🔐 Deal Rooms</h2>${cards}</div></main>`));
 });
 
