@@ -1,659 +1,645 @@
-const express = require("express");
-const { createClient } = require("@supabase/supabase-js");
-const twilio = require("twilio");
+const express=require("express");
+const path=require("path");
+const bcrypt=require("bcryptjs");
+const jwt=require("jsonwebtoken");
+const rateLimit=require("express-rate-limit");
+const {createClient}=require("@supabase/supabase-js");
+const twilio=require("twilio");
 
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const app=express();
+app.use(express.json({limit:"5mb"}));
+app.use(express.urlencoded({extended:true}));
+app.use(express.static(path.join(__dirname,"public")));
 
-const PORT = process.env.PORT || 10000;
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+const PORT=process.env.PORT||10000;
+const SUPABASE_URL=process.env.SUPABASE_URL;
+const SUPABASE_KEY=process.env.SUPABASE_KEY;
+const JWT_SECRET=process.env.JWT_SECRET;
 
-const plans = {
-  free: { price: 0, match: 30 },
-  pro: { price: 99, match: 20 },
-  prime: { price: 149, match: 20 }
+if(!SUPABASE_URL||!SUPABASE_KEY||!JWT_SECRET){
+  console.error("Missing SUPABASE_URL, SUPABASE_KEY or JWT_SECRET");
+  process.exit(1);
+}
+
+const db=createClient(SUPABASE_URL,SUPABASE_KEY);
+const limiter=rateLimit({
+  windowMs:15*60*1000,
+  max:100,
+  standardHeaders:true
+});
+app.use("/api/",limiter);
+
+const id=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+const phone=p=>String(p||"").replace(/[^\d+]/g,"");
+const jwtToken=u=>jwt.sign({id:u.id},JWT_SECRET,{expiresIn:"7d"});
+
+const plans={
+  free:{price:0,match:30},
+  pro:{price:99,match:20},
+  prime:{price:149,match:15},
+  elite:{price:null,match:null}
 };
 
-const skills = [
+const skills=[
   "plumbing","electrical","construction","painting","carpentry",
   "welding","cleaning","driving","moving","delivery","technology",
   "software","it","graphic design","photography","video",
   "marketing","sales","accounting","consulting","repair","installation"
 ];
 
-const uid = () =>
-  Date.now().toString(36) + Math.random().toString(36).slice(2,7);
-
-const phone = p => String(p || "").replace(/[^\d+]/g,"");
-
-const skillOf = text => {
-  text = String(text || "").toLowerCase();
-  return skills.find(s => text.includes(s)) || "other";
+const skillMatch=t=>{
+  t=String(t||"").toLowerCase();
+  return skills.find(s=>t.includes(s))||"general";
 };
 
-/* HOME */
+const hasPhone=t=>/(?:\+?254|0)?7\d{8}/.test(String(t||""));
 
-app.get("/", (req,res) => {
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>JR PHEEF</title>
-<style>
-body{font-family:Arial;background:#08101f;color:white;padding:25px}
-.card{background:#151e32;padding:20px;margin:12px 0;border-radius:15px}
-h1{font-size:42px}
-button{padding:12px 18px;border:0;border-radius:8px}
-</style>
-</head>
-<body>
-<h1>JR PHEEF</h1>
-<p>Find. Match. Trade.</p>
+async function user(uid){
+  const {data,error}=await db.from("members").select("*").eq("id",uid).maybeSingle();
+  if(error) throw error;
+  return data;
+}
 
-<div class="card">
-<h2>MARKET</h2>
-<p>Buy and sell products and services.</p>
-</div>
+async function auth(req,res,next){
+  try{
+    const h=req.headers.authorization||"";
+    if(!h.startsWith("Bearer ")) return res.status(401).json({error:"Login required"});
+    const x=jwt.verify(h.slice(7),JWT_SECRET);
+    const u=await user(x.id);
+    if(!u)return res.status(401).json({error:"Account not found"});
+    req.user=u;
+    next();
+  }catch(e){
+    res.status(401).json({error:"Session expired"});
+  }
+}
 
-<div class="card">
-<h2>WORK</h2>
-<p>Post a task. JR PHEEF finds the right skilled person, team or company.</p>
-</div>
-
-<div class="card">
-<h2>DEAL ROOMS</h2>
-<p>CHAT • FILES • PAYMENT • ACTIVITY</p>
-</div>
-
-<div class="card">
-<h2>JR PHEEF PAY</h2>
-<p>Payments • Rewards • Referrals • Coupons</p>
-</div>
-
-<p>Powered by JR PHEEF</p>
-</body>
-</html>
-`);
-});
-
-/* HEALTH */
-
-app.get("/health",(req,res)=>{
-  res.json({
-    ok:true,
-    service:"JR PHEEF",
-    status:"online",
-    time:new Date().toISOString()
-  });
-});
+app.get("/health",(req,res)=>res.json({
+  ok:true,
+  service:"JR PHEEF",
+  tagline:"Find. Match. Trade."
+}));
 
 /* SIGN UP */
-
 app.post("/api/signup",async(req,res)=>{
-  const {name,phone:rawPhone,password,birth_year,role="user"}=req.body;
+  try{
+    const {name,phone:rawPhone,password,birth_year,referral_code,terms_agreed}=req.body;
+    const p=phone(rawPhone);
 
-  if(!name||!rawPhone||!password)
-    return res.status(400).json({error:"Name, phone and password required"});
+    if(!name||!p||!password)
+      return res.status(400).json({error:"Name, phone and password are required"});
 
-  const user={
-    id:uid(),
-    name,
-    phone:phone(rawPhone),
-    password,
-    birth_year:birth_year||null,
-    role,
-    membership:"free",
-    credits:0,
-    rewards:0,
-    referral_code:"JRP-"+uid().slice(-5).toUpperCase(),
-    created_at:new Date().toISOString()
-  };
+    if(!terms_agreed)
+      return res.status(400).json({error:"You must agree to JR PHEEF Terms & Conditions"});
 
-  const {data,error}=await supabase
-    .from("members")
-    .insert(user)
-    .select()
-    .single();
+    if(password.length<6)
+      return res.status(400).json({error:"Password must be at least 6 characters"});
 
-  if(error)
-    return res.status(400).json({error:error.message});
+    const {data:existing}=await db.from("members")
+      .select("id").eq("phone",p).maybeSingle();
 
-  res.json({ok:true,user:data});
+    if(existing)
+      return res.status(409).json({error:"Account already exists"});
+
+    let referredBy=null;
+
+    if(referral_code){
+      const {data:r}=await db.from("members")
+        .select("id").eq("referral_code",referral_code).maybeSingle();
+      if(r)referredBy=r.id;
+    }
+
+    const u={
+      id:id(),
+      name:String(name).trim(),
+      phone:p,
+      password_hash:await bcrypt.hash(password,10),
+      birth_year:birth_year?Number(birth_year):null,
+      membership:"free",
+      credits:0,
+      rewards:0,
+      referral_code:"JRP-"+Math.random().toString(36).slice(2,7).toUpperCase(),
+      referred_by:referredBy,
+      terms_agreed_at:new Date().toISOString()
+    };
+
+    const {error}=await db.from("members").insert(u);
+    if(error)throw error;
+
+    if(referredBy){
+      const r=await user(referredBy);
+      if(r){
+        await db.from("members").update({
+          rewards:Number(r.rewards||0)+50
+        }).eq("id",referredBy);
+      }
+    }
+
+    res.json({
+      ok:true,
+      message:"Welcome to JR PHEEF",
+      token:jwtToken(u),
+      user:{
+        id:u.id,
+        name:u.name,
+        phone:u.phone,
+        membership:u.membership,
+        referral_code:u.referral_code
+      }
+    });
+
+  }catch(e){
+    console.error(e);
+    res.status(500).json({error:"Signup failed"});
+  }
 });
 
 /* LOGIN */
-
 app.post("/api/login",async(req,res)=>{
-  const {phone:rawPhone,password}=req.body;
+  try{
+    const p=phone(req.body.phone);
+    const {data:u}=await db.from("members")
+      .select("*").eq("phone",p).maybeSingle();
 
-  const {data,error}=await supabase
-    .from("members")
-    .select("*")
-    .eq("phone",phone(rawPhone))
-    .eq("password",password)
-    .single();
+    if(!u||!(await bcrypt.compare(req.body.password||"",u.password_hash)))
+      return res.status(401).json({error:"Invalid phone or password"});
 
-  if(error)
-    return res.status(401).json({error:"Invalid login"});
+    res.json({
+      ok:true,
+      token:jwtToken(u),
+      user:{
+        id:u.id,
+        name:u.name,
+        phone:u.phone,
+        membership:u.membership,
+        credits:u.credits,
+        rewards:u.rewards,
+        referral_code:u.referral_code
+      }
+    });
 
-  res.json({ok:true,user:data});
+  }catch(e){
+    res.status(500).json({error:"Login failed"});
+  }
 });
 
-/* LIST ITEM */
-
-app.post("/api/listings",async(req,res)=>{
-  const {
-    user_id,title,description,price,location,category,
-    images=[]
-  }=req.body;
-
-  if(!user_id||!title||!price)
-    return res.status(400).json({error:"Listing details required"});
-
-  if(Number(price)<=100)
-    return res.status(400).json({error:"Minimum price is above KSh 100"});
-
-  if(images.length<3)
-    return res.status(400).json({error:"Add at least 3 photos"});
-
-  if(images.length>20)
-    return res.status(400).json({error:"Maximum 20 photos"});
-
-  const {data,error}=await supabase
-    .from("listings")
-    .insert({
-      id:uid(),
-      user_id,
-      title,
-      description,
-      price,
-      location,
-      category,
-      images,
-      status:"active",
-      created_at:new Date().toISOString()
-    })
-    .select()
-    .single();
-
-  if(error)
-    return res.status(400).json({error:error.message});
-
-  res.json({ok:true,listing:data});
-});
-
-/* FIND */
-
-app.get("/api/listings",async(req,res)=>{
-  const {q,category,location}=req.query;
-
-  let query=supabase
-    .from("listings")
-    .select("*")
-    .eq("status","active")
-    .order("created_at",{ascending:false});
-
-  if(category) query=query.ilike("category",`%${category}%`);
-  if(location) query=query.ilike("location",`%${location}%`);
-  if(q) query=query.or(
-    `title.ilike.%${q}%,description.ilike.%${q}%`
-  );
-
-  const {data,error}=await query.limit(50);
-
-  if(error)
-    return res.status(400).json({error:error.message});
-
-  res.json(data);
-});
-
-/* WORK / TASKBRIDGE */
-
-app.post("/api/work",async(req,res)=>{
-  const {
-    owner_id,title,description,location,budget,
-    urgency="normal",company_id=null
-  }=req.body;
-
-  if(!owner_id||!title||!description)
-    return res.status(400).json({error:"Task details required"});
-
-  const skill=skillOf(title+" "+description);
-
-  const task={
-    id:uid(),
-    owner_id,
-    company_id,
-    title,
-    description,
-    location,
-    budget:budget||0,
-    urgency,
-    skill,
-    status:"ANALYZING",
-    created_at:new Date().toISOString()
-  };
-
-  const {data,error}=await supabase
-    .from("tasks")
-    .insert(task)
-    .select()
-    .single();
-
-  if(error)
-    return res.status(400).json({error:error.message});
-
-  const workers=await supabase
-    .from("workers")
-    .select("*")
-    .eq("status","available")
-    .ilike("skills",`%${skill}%`)
-    .limit(20);
-
-  await supabase
-    .from("tasks")
-    .update({
-      status:workers.data?.length?"ROUTED":"SUBMITTED"
-    })
-    .eq("id",task.id);
-
+/* CURRENT USER */
+app.get("/api/me",auth,async(req,res)=>{
+  const u=req.user;
   res.json({
-    ok:true,
-    task:data,
-    skill,
-    matched_workers:workers.data?.length||0,
-    workers:workers.data||[]
+    id:u.id,
+    name:u.name,
+    phone:u.phone,
+    membership:u.membership,
+    credits:u.credits,
+    rewards:u.rewards,
+    referral_code:u.referral_code,
+    terms_agreed_at:u.terms_agreed_at
   });
 });
 
-/* WORKER */
+/* MARKETPLACE */
+app.get("/api/listings",async(req,res)=>{
+  try{
+    let q=db.from("listings")
+      .select("*")
+      .eq("status","active")
+      .order("created_at",{ascending:false})
+      .limit(100);
 
-app.post("/api/workers",async(req,res)=>{
-  const {
-    user_id,skills,location,experience,
-    availability="available"
-  }=req.body;
+    if(req.query.category)q=q.eq("category",req.query.category);
+    if(req.query.location)q=q.ilike("location",`%${req.query.location}%`);
 
-  if(!user_id||!skills)
-    return res.status(400).json({error:"Worker details required"});
+    const {data,error}=await q;
+    if(error)throw error;
 
-  const {data,error}=await supabase
-    .from("workers")
-    .insert({
-      id:uid(),
-      user_id,
-      skills:Array.isArray(skills)?skills.join(","):skills,
-      location,
-      experience,
-      status:availability,
+    res.json({ok:true,listings:data||[]});
+  }catch(e){
+    res.status(500).json({error:"Could not load marketplace"});
+  }
+});
+
+/* CREATE LISTING */
+app.post("/api/listings",auth,async(req,res)=>{
+  try{
+    const {
+      title,description,price,location,category,images=[]
+    }=req.body;
+
+    const amount=Number(price);
+
+    if(!title||!amount||amount<=100)
+      return res.status(400).json({
+        error:"Items must be priced above KSh 100"
+      });
+
+    if(!Array.isArray(images)||images.length<3)
+      return res.status(400).json({
+        error:"Please upload at least 3 photos"
+      });
+
+    if(images.length>20)
+      return res.status(400).json({
+        error:"Maximum 20 photos"
+      });
+
+    const listing={
+      id:id(),
+      user_id:req.user.id,
+      title:String(title).trim(),
+      description:String(description||"").trim(),
+      price:amount,
+      location:String(location||"").trim(),
+      category:String(category||"general").trim(),
+      images,
+      status:"active"
+    };
+
+    const {error}=await db.from("listings").insert(listing);
+    if(error)throw error;
+
+    res.json({ok:true,listing});
+  }catch(e){
+    console.error(e);
+    res.status(500).json({error:"Listing failed"});
+  }
+});
+
+/* POST WORK */
+app.post("/api/work",auth,async(req,res)=>{
+  try{
+    const {
+      title,description,location,budget,urgency
+    }=req.body;
+
+    if(!title||!description)
+      return res.status(400).json({
+        error:"Title and description required"
+      });
+
+    const skill=skillMatch(title+" "+description);
+
+    const {data:workers}=await db.from("workers")
+      .select("*")
+      .eq("status","available");
+
+    const match=(workers||[]).find(w=>
+      String(w.skills||"").toLowerCase().includes(skill)
+    );
+
+    const task={
+      id:id(),
+      owner_id:req.user.id,
+      worker_id:match?.id||null,
+      title,
+      description,
+      location:location||"",
+      budget:Number(budget||0),
+      urgency:urgency||"normal",
+      skill,
+      status:match?"ROUTED":"MATCHING"
+    };
+
+    const {error}=await db.from("tasks").insert(task);
+    if(error)throw error;
+
+    res.json({
+      ok:true,
+      task,
+      message:match?
+        `JR PHEEF matched your task to a ${skill} worker.`:
+        "JR PHEEF is searching for a suitable person."
+    });
+
+  }catch(e){
+    console.error(e);
+    res.status(500).json({error:"Work request failed"});
+  }
+});
+
+/* WORKER PROFILE */
+app.post("/api/workers",auth,async(req,res)=>{
+  try{
+    const {skills:workerSkills,location,experience}=req.body;
+
+    if(!workerSkills)
+      return res.status(400).json({error:"Skills required"});
+
+    const worker={
+      id:id(),
+      user_id:req.user.id,
+      skills:String(workerSkills),
+      location:location||"",
+      experience:experience||"",
+      status:"available",
       rating:0,
-      jobs:0,
-      created_at:new Date().toISOString()
-    })
-    .select()
-    .single();
+      jobs:0
+    };
 
-  if(error)
-    return res.status(400).json({error:error.message});
+    const {error}=await db.from("workers").insert(worker);
+    if(error)throw error;
 
-  res.json({ok:true,worker:data});
+    res.json({ok:true,worker});
+  }catch(e){
+    res.status(500).json({error:"Worker registration failed"});
+  }
 });
 
-/* ACCEPT TASK */
-
-app.post("/api/work/:id/accept",async(req,res)=>{
-  const {worker_id}=req.body;
-
-  const {data,error}=await supabase
-    .from("tasks")
-    .update({
-      worker_id,
-      status:"ACCEPTED"
-    })
-    .eq("id",req.params.id)
-    .select()
-    .single();
-
-  if(error)
-    return res.status(400).json({error:error.message});
-
-  res.json({ok:true,task:data});
-});
-
-/* TASK STATUS */
-
-app.post("/api/work/:id/status",async(req,res)=>{
+/* WORK STATUS */
+app.post("/api/work/:id/status",auth,async(req,res)=>{
   const allowed=[
-    "IN PROGRESS",
-    "SUBMITTED FOR VERIFICATION",
-    "VERIFIED",
-    "PAYMENT",
-    "COMPLETED",
-    "CANCELLED",
-    "DISPUTED",
-    "REASSIGNED"
+    "MATCHING","ROUTED","ACCEPTED","IN PROGRESS",
+    "SUBMITTED FOR VERIFICATION","VERIFIED","PAYMENT",
+    "COMPLETED","CANCELLED","DISPUTED","REASSIGNED"
   ];
 
   if(!allowed.includes(req.body.status))
     return res.status(400).json({error:"Invalid status"});
 
-  const {data,error}=await supabase
-    .from("tasks")
+  const {data,error}=await db.from("tasks")
     .update({status:req.body.status})
     .eq("id",req.params.id)
-    .select()
-    .single();
+    .eq("owner_id",req.user.id)
+    .select().single();
 
-  if(error)
-    return res.status(400).json({error:error.message});
-
+  if(error)return res.status(400).json({error:"Task update failed"});
   res.json({ok:true,task:data});
 });
 
 /* DEAL ROOM */
-
-app.post("/api/dealrooms",async(req,res)=>{
-  const {
-    buyer_id,seller_id,listing_id=null,task_id=null
-  }=req.body;
-
-  const {data,error}=await supabase
-    .from("deal_rooms")
-    .insert({
-      id:uid(),
-      buyer_id,
+app.post("/api/dealrooms",auth,async(req,res)=>{
+  try{
+    const {
       seller_id,
+      buyer_id,
       listing_id,
-      task_id,
-      status:"OPEN",
-      created_at:new Date().toISOString()
-    })
-    .select()
-    .single();
+      task_id
+    }=req.body;
 
-  if(error)
-    return res.status(400).json({error:error.message});
+    const buyer=buyer_id||req.user.id;
+    const seller=seller_id;
 
-  res.json({ok:true,room:data});
+    if(!seller||seller===buyer)
+      return res.status(400).json({error:"Valid buyer and seller required"});
+
+    const {data:room,error}=await db.from("deal_rooms")
+      .insert({
+        id:id(),
+        buyer_id:buyer,
+        seller_id:seller,
+        listing_id:listing_id||null,
+        task_id:task_id||null,
+        status:"OPEN"
+      })
+      .select().single();
+
+    if(error)throw error;
+
+    res.json({ok:true,room});
+  }catch(e){
+    console.error(e);
+    res.status(500).json({error:"Deal Room creation failed"});
+  }
+});
+
+app.get("/api/dealrooms",auth,async(req,res)=>{
+  const {data,error}=await db.from("deal_rooms")
+    .select("*")
+    .or(`buyer_id.eq.${req.user.id},seller_id.eq.${req.user.id}`)
+    .order("created_at",{ascending:false});
+
+  if(error)return res.status(500).json({error:"Could not load Deal Rooms"});
+  res.json({ok:true,rooms:data||[]});
 });
 
 /* CHAT */
+app.get("/api/dealrooms/:id/messages",auth,async(req,res)=>{
+  const {data:room}=await db.from("deal_rooms")
+    .select("*").eq("id",req.params.id).maybeSingle();
 
-app.post("/api/dealrooms/:id/chat",async(req,res)=>{
-  const {sender_id,message}=req.body;
+  if(!room||
+    room.buyer_id!==req.user.id&&
+    room.seller_id!==req.user.id)
+    return res.status(403).json({error:"Access denied"});
 
-  if(!sender_id||!message)
-    return res.status(400).json({error:"Message required"});
+  const {data,error}=await db.from("messages")
+    .select("*")
+    .eq("room_id",req.params.id)
+    .order("created_at",{ascending:true});
 
-  if(/(?:\+?254|0)?7\d{8}/.test(message))
-    return res.status(400).json({
-      error:"Phone numbers are protected until connection is completed."
+  if(error)return res.status(500).json({error:"Chat unavailable"});
+  res.json({ok:true,messages:data||[]});
+});
+
+app.post("/api/dealrooms/:id/messages",auth,async(req,res)=>{
+  try{
+    const text=String(req.body.message||"").trim();
+
+    if(!text)return res.status(400).json({error:"Message required"});
+
+    const {data:room}=await db.from("deal_rooms")
+      .select("*").eq("id",req.params.id).maybeSingle();
+
+    if(!room||
+      room.buyer_id!==req.user.id&&
+      room.seller_id!==req.user.id)
+      return res.status(403).json({error:"Access denied"});
+
+    if(hasPhone(text))
+      return res.status(400).json({
+        error:"For safety, phone numbers cannot be shared in chat before connection is completed."
+      });
+
+    const {data,error}=await db.from("messages")
+      .insert({
+        id:id(),
+        room_id:room.id,
+        sender_id:req.user.id,
+        message:text
+      })
+      .select().single();
+
+    if(error)throw error;
+
+    res.json({ok:true,message:data});
+  }catch(e){
+    res.status(500).json({error:"Message failed"});
+  }
+});
+
+/* PAYMENT REQUEST */
+app.post("/api/payments",auth,async(req,res)=>{
+  try{
+    const {room_id,amount,purpose="connection"}=req.body;
+    const value=Number(amount);
+
+    if(!room_id||!value||value<=0)
+      return res.status(400).json({error:"Valid payment required"});
+
+    const {data:room}=await db.from("deal_rooms")
+      .select("*").eq("id",room_id).maybeSingle();
+
+    if(!room||
+      room.buyer_id!==req.user.id&&
+      room.seller_id!==req.user.id)
+      return res.status(403).json({error:"Access denied"});
+
+    const {data:payment,error}=await db.from("payments")
+      .insert({
+        id:id(),
+        user_id:req.user.id,
+        room_id,
+        amount:value,
+        purpose,
+        status:"PENDING"
+      })
+      .select().single();
+
+    if(error)throw error;
+
+    res.json({
+      ok:true,
+      payment,
+      message:"Payment created. Confirmation must come from the connected payment provider."
     });
 
-  const {data,error}=await supabase
-    .from("messages")
-    .insert({
-      id:uid(),
-      room_id:req.params.id,
-      sender_id,
-      message,
-      created_at:new Date().toISOString()
-    })
-    .select()
-    .single();
-
-  if(error)
-    return res.status(400).json({error:error.message});
-
-  res.json({ok:true,message:data});
+  }catch(e){
+    console.error(e);
+    res.status(500).json({error:"Payment request failed"});
+  }
 });
 
-/* PAYMENT */
+/* REAL PAYMENT CALLBACK */
+app.post("/api/payments/callback",async(req,res)=>{
+  try{
+    const secret=req.headers["x-payment-secret"];
 
-app.post("/api/pay",async(req,res)=>{
-  const {user_id,room_id,amount,type="connection"}=req.body;
+    if(!process.env.PAYMENT_CALLBACK_SECRET||
+      secret!==process.env.PAYMENT_CALLBACK_SECRET)
+      return res.status(401).json({error:"Unauthorized"});
 
-  if(!user_id||!room_id||!amount)
-    return res.status(400).json({error:"Payment details required"});
+    const {
+      payment_id,status,provider_reference
+    }=req.body;
 
-  const {data,error}=await supabase
-    .from("payments")
-    .insert({
-      id:uid(),
-      user_id,
-      room_id,
-      amount,
-      type,
-      status:"PAID",
-      created_at:new Date().toISOString()
-    })
-    .select()
-    .single();
+    if(!payment_id||!["PAID","FAILED","CANCELLED"].includes(status))
+      return res.status(400).json({error:"Invalid payment callback"});
 
-  if(error)
-    return res.status(400).json({error:error.message});
+    const update={
+      status,
+      provider_reference:provider_reference||null
+    };
 
-  res.json({ok:true,payment:data});
+    if(status==="PAID")
+      update.confirmed_at=new Date().toISOString();
+
+    const {data,error}=await db.from("payments")
+      .update(update)
+      .eq("id",payment_id)
+      .select().single();
+
+    if(error)throw error;
+
+    res.json({ok:true,payment:data});
+  }catch(e){
+    console.error(e);
+    res.status(500).json({error:"Payment callback failed"});
+  }
 });
 
-/* MEMBERSHIP */
+/* REFERRALS */
+app.post("/api/referrals",auth,async(req,res)=>{
+  try{
+    const code=req.user.referral_code;
 
-app.post("/api/membership",async(req,res)=>{
-  const {user_id,plan}=req.body;
+    const {count,error}=await db.from("members")
+      .select("*",{count:"exact",head:true})
+      .eq("referred_by",req.user.id);
 
-  if(!plans[plan])
-    return res.status(400).json({error:"Invalid plan"});
+    if(error)throw error;
 
-  const {data,error}=await supabase
-    .from("members")
-    .update({membership:plan})
-    .eq("id",user_id)
-    .select()
-    .single();
-
-  if(error)
-    return res.status(400).json({error:error.message});
-
-  res.json({
-    ok:true,
-    user:data,
-    price:plans[plan].price,
-    match_fee:plans[plan].match
-  });
+    res.json({
+      ok:true,
+      referral_code:code,
+      referrals:count||0,
+      rewards:req.user.rewards||0,
+      minimum_withdrawal:200
+    });
+  }catch(e){
+    res.status(500).json({error:"Referral information unavailable"});
+  }
 });
 
-/* REFERRAL */
+/* COUPONS */
+app.post("/api/coupons/check",auth,async(req,res)=>{
+  try{
+    const code=String(req.body.code||"").trim().toUpperCase();
 
-app.post("/api/referral",async(req,res)=>{
-  const {user_id,referral_code}=req.body;
+    if(!code)return res.status(400).json({error:"Coupon code required"});
 
-  const ref=await supabase
-    .from("members")
-    .select("id")
-    .eq("referral_code",referral_code)
-    .single();
+    const {data,error}=await db.from("coupons")
+      .select("*")
+      .eq("code",code)
+      .eq("active",true)
+      .maybeSingle();
 
-  if(ref.error)
-    return res.status(404).json({error:"Referral code not found"});
+    if(error)throw error;
 
-  if(ref.data.id===user_id)
-    return res.status(400).json({error:"Cannot refer yourself"});
+    if(!data)return res.status(404).json({error:"Invalid coupon"});
 
-  const {error}=await supabase
-    .from("members")
-    .update({referred_by:ref.data.id})
-    .eq("id",user_id);
+    if(data.expires_at&&new Date(data.expires_at)<new Date())
+      return res.status(400).json({error:"Coupon expired"});
 
-  if(error)
-    return res.status(400).json({error:error.message});
+    res.json({
+      ok:true,
+      coupon:data
+    });
 
-  res.json({ok:true,message:"Referral connected"});
-});
-
-/* COUPON */
-
-app.post("/api/coupon",async(req,res)=>{
-  const {code}=req.body;
-
-  const {data,error}=await supabase
-    .from("coupons")
-    .select("*")
-    .eq("code",String(code).toUpperCase())
-    .eq("active",true)
-    .single();
-
-  if(error)
-    return res.status(404).json({error:"Coupon not found"});
-
-  res.json({ok:true,coupon:data});
+  }catch(e){
+    res.status(500).json({error:"Coupon check failed"});
+  }
 });
 
 /* WHATSAPP */
+app.post("/api/webhook/whatsapp",async(req,res)=>{
+  try{
+    const incoming=String(req.body.Body||"").trim();
+    const from=phone(req.body.From||"");
 
-app.post("/api/webhook/whatsapp",(req,res)=>{
-  const body=String(req.body.Body||"").trim().toLowerCase();
+    let reply;
 
-  let reply;
+    if(!incoming){
+      reply="Karibu JR PHEEF 👋\nFind. Match. Trade.\n\nBUY — find something\nSELL — sell something\nWORK — find/post work";
+    }else{
+      const text=incoming.toLowerCase();
 
-  if(body.includes("buy"))
-    reply="🔥 JR PHEEF\nSend what you want + location + budget.";
+      if(text.includes("buy"))
+        reply="JR PHEEF is ready to help you BUY. Tell me what you are looking for and your location.";
+      else if(text.includes("sell"))
+        reply="Ready to SELL? Send the item name, price, location and at least 3 photos.";
+      else if(text.includes("work"))
+        reply="Tell JR PHEEF the work you need done, your location and budget. We will match you with a suitable person.";
+      else
+        reply="Nimekupata 👍 Tell me what you want to BUY, SELL or WORK on, and JR PHEEF will guide you.";
+    }
 
-  else if(body.includes("sell"))
-    reply="🔥 JR PHEEF SELL\nSend item, price, location and at least 3 photos.";
+    const twiml=new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
 
-  else if(
-    body.includes("work")||
-    body.includes("job")||
-    body.includes("task")
-  )
-    reply="🛠️ JR PHEEF WORK\nTell me the task, location, budget and urgency.";
+    res.type("text/xml").send(twiml.toString());
 
-  else
-    reply=
-`👋 Welcome to JR PHEEF.
-
-BUY — find something
-SELL — list something
-WORK — find skilled help
-
-Find. Match. Trade.`;
-
-  const twiml=new twilio.twiml.MessagingResponse();
-  twiml.message(reply);
-
-  res.type("text/xml").send(twiml.toString());
+  }catch(e){
+    console.error(e);
+    res.status(500).send("Webhook error");
+  }
 });
 
-/* DASHBOARD */
+/* FRONTEND */
+app.use((req,res)=>{
+  if(req.method==="GET")
+    return res.sendFile(path.join(__dirname,"public","index.html"));
 
-app.get("/dashboard/:id",async(req,res)=>{
-  const {data,error}=await supabase
-    .from("members")
-    .select("*")
-    .eq("id",req.params.id)
-    .single();
-
-  if(error)
-    return res.status(404).send("User not found");
-
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>JR PHEEF Dashboard</title>
-<style>
-body{font-family:Arial;background:#08101f;color:white;padding:20px}
-.box{background:#151e32;padding:18px;margin:10px 0;border-radius:14px}
-</style>
-</head>
-<body>
-
-<h1>JR PHEEF</h1>
-<p>Welcome, ${data.name}</p>
-
-<div class="box">
-<b>MARKET</b><br>
-Find • Buy • Sell
-</div>
-
-<div class="box">
-<b>WORK</b><br>
-Post Tasks • Find Workers • Manage Jobs
-</div>
-
-<div class="box">
-<b>DEAL ROOMS</b><br>
-Chat • Files • Payment • Activity
-</div>
-
-<div class="box">
-<b>JR PHEEF PAY</b><br>
-Payments • Credits • Rewards
-</div>
-
-<div class="box">
-<b>REWARDS</b><br>
-Credits: KSh ${data.credits||0}<br>
-Rewards: KSh ${data.rewards||0}<br>
-Minimum withdrawal: KSh 200
-</div>
-
-<div class="box">
-<b>REFERRAL</b><br>
-${data.referral_code}
-</div>
-
-<div class="box">
-<b>MEMBERSHIP</b><br>
-${String(data.membership||"free").toUpperCase()}
-</div>
-
-<div class="box">
-<b>DELIVERY</b><br>
-Riders • Movers • Delivery Partners
-</div>
-
-</body>
-</html>
-`);
-});
-
-/* OWNER */
-
-app.get("/owner",async(req,res)=>{
-  if(req.query.key!==process.env.OWNER_KEY)
-    return res.status(403).send("Forbidden");
-
-  const members=await supabase
-    .from("members")
-    .select("id,name,phone,membership,created_at")
-    .order("created_at",{ascending:false})
-    .limit(100);
-
-  const listings=await supabase
-    .from("listings")
-    .select("*")
-    .order("created_at",{ascending:false})
-    .limit(100);
-
-  const tasks=await supabase
-    .from("tasks")
-    .select("*")
-    .order("created_at",{ascending:false})
-    .limit(100);
-
-  res.json({
-    platform:"JR PHEEF",
-    members:members.data||[],
-    listings:listings.data||[],
-    tasks:tasks.data||[]
-  });
+  res.status(404).json({error:"Route not found"});
 });
 
 app.listen(PORT,()=>{
