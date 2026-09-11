@@ -1,322 +1,187 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#087CFF">
-<title>JR PHEEF — Find. Match. Trade.</title>
+<title>JR PHEEF</title>
 <style>
-:root{--p:#087cff;--dark:#071a33;--bg:#f4f7fb;--card:#fff;--txt:#172033;--muted:#718096;--line:#e4e9f0}
-*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--txt)}
-button,input,textarea,select{font:inherit}button{cursor:pointer;border:0}
-.top{position:sticky;top:0;z-index:20;background:var(--dark);color:white;padding:14px 18px;display:flex;align-items:center;justify-content:space-between}
-.brand{font-weight:900;font-size:21px}.tag{font-size:11px;opacity:.75}.top button{background:none;color:white}
-.wrap{max-width:1050px;margin:auto;padding:16px}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:14px;box-shadow:0 4px 20px #00000008}
-.hero{text-align:center;padding:30px 15px}.logo{font-size:38px;font-weight:900;color:var(--p);letter-spacing:-2px}
-.slogan{font-size:17px;color:var(--muted);margin:5px 0 20px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
-.tile{padding:18px 10px;background:#f7faff;border:1px solid var(--line);border-radius:15px;text-align:center;font-weight:700}
-.tile b{display:block;font-size:25px;margin-bottom:7px}.tile small{color:var(--muted)}
-input,textarea,select{width:100%;padding:13px;margin:6px 0;border:1px solid var(--line);border-radius:11px;background:white}
-textarea{min-height:90px}.btn{background:var(--p);color:white;padding:12px 18px;border-radius:11px;font-weight:700;margin:5px 0}.btn.dark{background:var(--dark)}.btn.light{background:#edf5ff;color:var(--p)}.btn.red{background:#d93025}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.between{display:flex;justify-content:space-between;gap:10px;align-items:center}
-.hide{display:none!important}.muted{color:var(--muted)}.price{font-size:20px;font-weight:900}.pill{display:inline-block;padding:5px 9px;border-radius:99px;background:#edf5ff;color:var(--p);font-size:12px;font-weight:700}
-nav{position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid var(--line);z-index:20;display:flex;overflow:auto}
-nav button{min-width:78px;background:white;padding:9px 5px;color:#526071;font-size:11px}nav b{display:block;font-size:19px}
-body{padding-bottom:65px}
-.toast{position:fixed;bottom:75px;left:50%;transform:translateX(-50%);background:#071a33;color:white;padding:12px 18px;border-radius:12px;z-index:50;display:none}
-video{width:100%;border-radius:14px;background:#000;max-height:480px}
-.chat{max-height:430px;overflow:auto;background:#f6f8fb;padding:10px;border-radius:14px}
-.msg{padding:10px;margin:7px;border-radius:12px;background:white;max-width:80%}.mine{margin-left:auto;background:#e7f2ff}
-.banner{background:linear-gradient(135deg,#071a33,#087cff);color:white;border-radius:18px;padding:22px}
-.offline{background:#fff4d6;color:#795b00;padding:8px;text-align:center;font-size:12px}
-.theme{width:35px;height:35px;border-radius:50%;border:2px solid white}
+:root{--blue:#087CFF;--aqua:#00C2FF;--navy:#061A33;--bg:#F4F8FC;--card:#fff;--text:#142033;--muted:#718096;--line:#E2E8F0}
+*{box-sizing:border-box}body{margin:0;font-family:Arial;background:var(--bg);color:var(--text);padding-bottom:65px}
+header{background:linear-gradient(110deg,var(--navy),var(--blue),var(--aqua));color:white;padding:15px 18px;position:sticky;top:0;z-index:10}
+.brand{font-size:23px;font-weight:900}.tag{font-size:11px;opacity:.85}
+main{max-width:950px;margin:auto;padding:15px}.card{background:var(--card);padding:18px;border-radius:18px;margin-bottom:14px;box-shadow:0 4px 20px #00000009;border:1px solid var(--line)}
+.logo{font-size:40px;font-weight:900;color:var(--blue);letter-spacing:-2px}.hero{text-align:center;padding:30px 15px}
+input,textarea,select{width:100%;padding:13px;border:1px solid var(--line);border-radius:11px;margin:5px 0;background:white}textarea{min-height:90px}
+button{border:0;border-radius:11px;padding:12px 17px;font-weight:bold;cursor:pointer}.btn{background:var(--blue);color:white}.aqua{background:var(--aqua);color:white}.dark{background:var(--navy);color:white}.light{background:#EAF6FF;color:var(--blue)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:10px}.tile{background:#F5FAFF;border:1px solid #DCEBFA;padding:17px 8px;color:var(--text)}.tile b{display:block;font-size:25px;margin-bottom:6px}
+.muted{color:var(--muted)}.pill{display:inline-block;background:#EAF6FF;color:var(--blue);padding:5px 9px;border-radius:20px;font-size:11px;font-weight:bold}.row{display:flex;gap:7px;flex-wrap:wrap}
+nav{position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid var(--line);display:flex;overflow:auto;z-index:20}nav button{background:white;color:#536173;min-width:75px;font-size:10px;padding:8px 4px}nav b{display:block;font-size:19px}
+.hide{display:none!important}.price{font-size:20px;font-weight:bold}.msg{background:#F0F6FC;padding:10px;border-radius:12px;margin:6px;max-width:80%}.mine{margin-left:auto;background:#DDF3FF}
+video{width:100%;border-radius:14px;background:#000}.offline{text-align:center;background:#FFF0C2;padding:8px;font-size:12px;color:#765900}
+.banner{background:linear-gradient(110deg,var(--navy),var(--blue),var(--aqua));color:white;padding:22px;border-radius:18px}
 </style>
 </head>
-
 <body>
-<header class="top">
-  <div>
-    <div class="brand">JR PHEEF</div>
-    <div class="tag">Find. Match. Trade.</div>
-  </div>
-  <div class="row">
-    <button onclick="theme()">🎨</button>
-    <button onclick="logout()">Logout</button>
-  </div>
+
+<header>
+ <div class="brand">JR PHEEF</div>
+ <div class="tag">Find. Match. Trade.</div>
 </header>
 
-<div id="offline" class="offline hide">📴 You're offline. Saved actions will sync when connection returns.</div>
+<div id="offline" class="offline hide">📴 OFFLINE — saved information remains available and will sync when connected.</div>
 
-<main class="wrap">
+<main>
 
-<!-- WELCOME / LOGIN -->
 <section id="auth">
-  <div class="card hero">
-    <div class="logo">JR PHEEF</div>
-    <div class="slogan">Find. Match. Trade.</div>
-    <div class="muted">Buy • Sell • Work • Match • Chat • Deal • Deliver • Grow</div>
-  </div>
+ <div class="card hero">
+  <div class="logo">JR PHEEF</div>
+  <h3>Find. Match. Trade.</h3>
+  <p class="muted">Buy • Sell • Work • Match • Chat • Deal • Deliver • Grow</p>
+ </div>
 
-  <div class="card">
-    <h2>Welcome back</h2>
-    <button class="btn" onclick="google()">Continue with Google</button>
-    <p class="muted">or continue with email</p>
-    <input id="le" type="email" placeholder="Email">
-    <input id="lp" type="password" placeholder="Password">
-    <button class="btn dark" onclick="login()">LOGIN</button>
-  </div>
+ <div class="card">
+  <h2>Welcome back</h2>
+  <button class="btn" onclick="google()">Continue with Google</button>
+  <p class="muted">or use your JR PHEEF email</p>
+  <input id="email" type="email" placeholder="Email">
+  <input id="pass" type="password" placeholder="Password">
+  <button class="dark" onclick="login()">LOGIN</button>
+ </div>
 
-  <div class="card">
-    <h2>Create your JR PHEEF account</h2>
-    <input id="sn" placeholder="Full real name">
-    <input id="se" type="email" placeholder="Email address">
-    <input id="sp" type="password" placeholder="Create password">
-    <input id="sphone" placeholder="Phone number">
-    <input id="sy" type="number" placeholder="Birth year">
-    <input id="ref" placeholder="Referral code (optional)">
-    <label><input id="terms" type="checkbox" style="width:auto"> I agree to JR PHEEF Terms & Conditions</label>
-    <button class="btn" onclick="signup()">I AGREE & CONTINUE</button>
-  </div>
-
-  <div class="card">
-    <h3>How JR PHEEF works</h3>
-    <p>🔎 Find what you need.</p>
-    <p>🤝 Match with the right person or business.</p>
-    <p>💬 Chat naturally inside a protected Deal Room.</p>
-    <p>💳 Payments are confirmed by the actual payment system.</p>
-    <p>🚚 Request delivery when needed.</p>
-    <p>🧠 Think and grow with DGBO Business Center.</p>
-  </div>
+ <div class="card">
+  <h2>Create account</h2>
+  <input id="name" placeholder="Full real name">
+  <input id="se" type="email" placeholder="Email">
+  <input id="sp" type="password" placeholder="Password">
+  <input id="phone" placeholder="Phone">
+  <input id="year" type="number" placeholder="Birth year">
+  <input id="ref" placeholder="Referral code (optional)">
+  <label><input id="agree" type="checkbox" style="width:auto"> I agree to JR PHEEF Terms & Conditions</label>
+  <button class="btn" onclick="signup()">I AGREE & CONTINUE</button>
+ </div>
 </section>
 
-<!-- APP -->
 <section id="app" class="hide">
 
+ <div class="card">
+  <b id="hello"></b>
+  <span id="net" class="pill">ONLINE</span>
+ </div>
+
+ <div class="banner">
+  <h2>Find. Match. Trade.</h2>
+  <input id="search" placeholder="🔎 What are you looking for?">
+  <button class="aqua" onclick="market()">SEARCH</button>
+ </div>
+
+ <div id="home" class="page">
+  <div class="card"><h3>Discover & Deals</h3><div id="ads"></div></div>
   <div class="card">
-    <div class="between">
-      <div>
-        <b id="hello">Welcome</b>
-        <div class="muted">What are we doing today?</div>
-      </div>
-      <span id="net" class="pill">ONLINE</span>
-    </div>
+   <h3>Choose your option</h3>
+   <div class="grid">
+    <button class="tile" onclick="page('market')"><b>🛒</b>Market</button>
+    <button class="tile" onclick="page('shorts')"><b>🎬</b>Shorts</button>
+    <button class="tile" onclick="page('work')"><b>💼</b>WORK</button>
+    <button class="tile" onclick="page('deals')"><b>🤝</b>Matches</button>
+    <button class="tile" onclick="page('deals')"><b>💬</b>Deal Rooms</button>
+    <button class="tile" onclick="page('delivery')"><b>🚚</b>Delivery</button>
+    <button class="tile" onclick="page('wallet')"><b>👛</b>Wallet</button>
+    <button class="tile" onclick="page('invest')"><b>📈</b>Invest</button>
+    <button class="tile" onclick="page('dgbo')"><b>🧠</b>DGBO</button>
+    <button class="tile" onclick="page('adsPage')"><b>📢</b>Advertise</button>
+    <button class="tile" onclick="page('profile')"><b>👤</b>Profile</button>
+   </div>
   </div>
+ </div>
 
-  <div class="banner">
-    <h2>Find. Match. Trade.</h2>
-    <p>Discover products, people, businesses, opportunities and work.</p>
-    <input id="search" placeholder="🔎 Search anything..." onkeydown="if(event.key==='Enter')find()">
-    <button class="btn" onclick="find()">SEARCH</button>
+ <div id="market" class="page hide">
+  <div class="card"><h2>🛒 MARKET</h2><input id="mq" placeholder="Search products, services or businesses"><button class="btn" onclick="loadMarket()">SEARCH</button></div>
+  <div id="marketList"></div>
+  <div class="card">
+   <h3>Sell</h3>
+   <input id="lt" placeholder="Title"><textarea id="ld" placeholder="Description"></textarea>
+   <input id="lp" type="number" placeholder="Price — above KSh 100">
+   <input id="ll" placeholder="Location"><input id="lc" placeholder="Country"><input id="lcat" placeholder="Category">
+   <input id="lf" type="file" multiple accept="image/*">
+   <button class="btn" onclick="sell()">PUBLISH — 3 TO 20 PHOTOS</button>
   </div>
+ </div>
 
-  <section id="home" class="page">
-    <div class="card">
-      <h3>Discover & Deals</h3>
-      <div id="ads"><p class="muted">Loading promotions...</p></div>
-    </div>
+ <div id="shorts" class="page hide">
+  <div class="card">
+   <h2>🎬 JR PHEEF SHORTS</h2>
+   <p class="muted">Business • skills • products • ideas • education • entertainment</p>
+   <input id="sv" type="file" accept="video/*">
+   <textarea id="sc" placeholder="Caption"></textarea><input id="sct" placeholder="Category">
+   <button class="btn" onclick="short()">SUBMIT SHORT</button>
+   <p class="muted">🔐 Contact Shield blocks phone numbers, emails and off-platform contact sharing.</p>
+  </div>
+  <div id="shortList"></div>
+ </div>
 
-    <div class="card">
-      <h3>Choose your option</h3>
-      <div class="grid">
-        <button class="tile" onclick="page('market')"><b>🛒</b>Market<small>Buy & sell</small></button>
-        <button class="tile" onclick="page('shorts')"><b>🎬</b>Shorts<small>Watch & create</small></button>
-        <button class="tile" onclick="page('work')"><b>💼</b>WORK<small>Tasks & talent</small></button>
-        <button class="tile" onclick="page('deals')"><b>🤝</b>Matches<small>Connections</small></button>
-        <button class="tile" onclick="page('deals')"><b>💬</b>Deals<small>Deal Rooms</small></button>
-        <button class="tile" onclick="page('delivery')"><b>🚚</b>Delivery<small>Move it</small></button>
-        <button class="tile" onclick="page('wallet')"><b>👛</b>Wallet<small>Pay & rewards</small></button>
-        <button class="tile" onclick="page('invest')"><b>📈</b>Invest<small>Grow credits</small></button>
-        <button class="tile" onclick="page('dgbo')"><b>🧠</b>DGBO<small>Business center</small></button>
-        <button class="tile" onclick="page('adsPage')"><b>📢</b>Advertise<small>Reach people</small></button>
-        <button class="tile" onclick="page('profile')"><b>👤</b>Profile<small>Account</small></button>
-      </div>
-    </div>
-  </section>
+ <div id="work" class="page hide">
+  <div class="card">
+   <h2>💼 WORK</h2>
+   <input id="tt" placeholder="Task title"><textarea id="td" placeholder="Describe the task"></textarea>
+   <input id="tb" type="number" placeholder="Budget"><input id="tl" placeholder="Location"><input id="tsk" placeholder="Skill">
+   <button class="btn" onclick="task()">POST TASK</button>
+  </div>
+  <div class="card">
+   <h3>Freelancer / Talent</h3>
+   <input id="ws" placeholder="Skills"><input id="wl" placeholder="Location"><input id="we" placeholder="Experience">
+   <button class="btn" onclick="talent()">SAVE TALENT PROFILE</button>
+  </div>
+  <div id="tasks"></div><div id="talents"></div>
+ </div>
 
-  <!-- MARKET -->
-  <section id="market" class="page hide">
-    <div class="card">
-      <h2>🛒 JR PHEEF MARKET</h2>
-      <input id="mq" placeholder="Search products, services, businesses..." onkeydown="if(event.key==='Enter')loadMarket()">
-      <button class="btn" onclick="loadMarket()">SEARCH</button>
-    </div>
-    <div id="marketList"></div>
+ <div id="deals" class="page hide">
+  <div class="card"><h2>💬 DEAL ROOMS</h2><p class="muted">Normal conversation. Contact information stays protected.</p></div>
+  <div id="dealList"></div>
+  <div id="chat" class="card hide"><div id="msgs"></div><input id="message" placeholder="Write a message"><button class="btn" onclick="send()">SEND</button></div>
+ </div>
 
-    <div class="card">
-      <h3>Sell something</h3>
-      <input id="lt" placeholder="Title">
-      <textarea id="ld" placeholder="Description"></textarea>
-      <input id="lprice" type="number" placeholder="Price — minimum above KSh 100">
-      <input id="lloc" placeholder="Location">
-      <input id="lcountry" placeholder="Country">
-      <input id="lcat" placeholder="Category">
-      <input id="limgs" placeholder="Photo URLs — minimum 3, maximum 20">
-      <button class="btn" onclick="sell()">PUBLISH LISTING</button>
-    </div>
-  </section>
+ <div id="delivery" class="page hide">
+  <div class="card"><h2>🚚 DELIVERY</h2>
+   <input id="pick" placeholder="Pickup"><input id="drop" placeholder="Destination">
+   <select id="prov"><option>JR PHEEF NETWORK</option><option>EXPRESS</option><option>STANDARD</option><option>ECONOMY</option><option>SCHEDULE</option><option>SELF PICKUP</option></select>
+   <button class="btn" onclick="deliver()">REQUEST DELIVERY</button>
+  </div>
+  <div class="card"><h3>📍 Live Tracking</h3><div style="height:200px;background:#E8EEF5;border-radius:14px;display:grid;place-items:center">Google Maps / live route</div></div>
+ </div>
 
-  <!-- SHORTS -->
-  <section id="shorts" class="page hide">
-    <div class="card">
-      <h2>🎬 JR PHEEF SHORTS</h2>
-      <p class="muted">Business • products • skills • ideas • education • entertainment</p>
-      <p>🔐 Contact Shield protects Shorts from phone numbers, emails and attempts to move transactions outside JR PHEEF.</p>
-      <input id="sv" placeholder="Video URL">
-      <textarea id="sc" placeholder="Caption"></textarea>
-      <input id="scc" placeholder="Category">
-      <button class="btn" onclick="postShort()">SUBMIT SHORT</button>
-    </div>
-    <div id="shortList"></div>
-  </section>
+ <div id="wallet" class="page hide">
+  <div class="card"><h2>👛 WALLET</h2><div class="grid"><div class="tile">Withdrawable<b id="cash">KSh 0</b></div><div class="tile">Growth Credits<b id="cred">KSh 0</b></div></div></div>
+  <div class="card"><h3>Withdraw</h3><input id="wa" type="number" placeholder="Minimum KSh 200"><input id="wp" placeholder="M-Pesa phone"><button class="btn" onclick="withdraw()">REQUEST</button></div>
+ </div>
 
-  <!-- WORK -->
-  <section id="work" class="page hide">
-    <div class="card">
-      <h2>💼 JR PHEEF WORK</h2>
-      <p class="muted">Post a task or find skilled people.</p>
-      <input id="tt" placeholder="Task title">
-      <textarea id="td" placeholder="What needs to be done?"></textarea>
-      <input id="tb" type="number" placeholder="Budget">
-      <input id="tl" placeholder="Location">
-      <input id="ts" placeholder="Skill required">
-      <select id="tu"><option>NORMAL</option><option>URGENT</option><option>ASAP</option></select>
-      <button class="btn" onclick="task()">POST TASK</button>
-    </div>
-    <div id="tasks"></div>
-    <div class="card">
-      <h3>Freelancer / Talent</h3>
-      <input id="skills" placeholder="Your skills">
-      <input id="wloc" placeholder="Location">
-      <input id="exp" placeholder="Experience">
-      <select id="avail"><option>AVAILABLE</option><option>BUSY</option></select>
-      <button class="btn" onclick="talent()">CREATE TALENT PROFILE</button>
-    </div>
-    <div id="talents"></div>
-  </section>
+ <div id="invest" class="page hide">
+  <div class="card"><h2>📈 JR PHEEF INVEST</h2><p>Growth Credits: <b id="ig"></b></p><p class="muted">Internal Growth Products — JR PHEEF & DGBO.</p></div>
+  <div id="products"></div><div id="holdings" class="card"></div>
+ </div>
 
-  <!-- DEALS -->
-  <section id="deals" class="page hide">
-    <div class="card">
-      <h2>💬 DEAL ROOMS</h2>
-      <p class="muted">Natural conversation. No phone numbers required.</p>
-    </div>
-    <div id="dealList"></div>
-    <div id="chatBox" class="card hide">
-      <h3>Deal Room</h3>
-      <div id="messages" class="chat"></div>
-      <input id="message" placeholder="Write a message...">
-      <button class="btn" onclick="sendMessage()">SEND</button>
-    </div>
-  </section>
+ <div id="dgbo" class="page hide">
+  <div class="card hero"><div class="logo">DGBO</div><h2>BUSINESS CENTER</h2><p class="muted">Ideas. Strategy. Growth.</p></div>
+  <div class="grid">
+   <button class="tile" onclick="dg('Business Idea')"><b>💡</b>Business Ideas</button>
+   <button class="tile" onclick="dg('Grow My Business')"><b>📈</b>Grow Business</button>
+   <button class="tile" onclick="dg('Business Plan')"><b>📋</b>Business Plan</button>
+   <button class="tile" onclick="dg('Funding')"><b>💰</b>Funding</button>
+   <button class="tile" onclick="dg('Business for Sale')"><b>🏢</b>Business for Sale</button>
+   <button class="tile" onclick="dg('Partnership')"><b>🤝</b>Partnership</button>
+  </div>
+  <div id="dgform" class="card hide"><h3 id="dgt"></h3><input id="dgo" placeholder="Title"><textarea id="dgd" placeholder="Explain"></textarea><input id="dga" type="number" placeholder="Amount"><input id="dgl" placeholder="Location"><input id="dgc" placeholder="Category"><button class="btn" onclick="sendDG()">SEND TO DGBO</button></div>
+ </div>
 
-  <!-- DELIVERY -->
-  <section id="delivery" class="page hide">
-    <div class="card">
-      <h2>🚚 JR PHEEF DELIVERY</h2>
-      <p class="muted">Request pickup, movement or delivery.</p>
-      <input id="pickup" placeholder="Pickup location">
-      <input id="dropoff" placeholder="Destination">
-      <select id="provider"><option>JR PHEEF NETWORK</option><option>EXPRESS</option><option>STANDARD</option><option>ECONOMY</option><option>SCHEDULE</option><option>SELF PICKUP</option></select>
-      <input id="dprice" type="number" placeholder="Estimated price">
-      <button class="btn" onclick="delivery()">REQUEST DELIVERY</button>
-    </div>
-    <div class="card">
-      <h3>📍 Live delivery</h3>
-      <p class="muted">When enabled, authorized tracking can show route, driver status, ETA and distance.</p>
-      <div style="height:220px;background:#e9eef5;border-radius:15px;display:grid;place-items:center">Google Maps will appear here</div>
-    </div>
-  </section>
+ <div id="adsPage" class="page hide">
+  <div class="card"><h2>📢 ADVERTISE</h2><input id="ac" placeholder="Business/company"><input id="ah" placeholder="Headline"><textarea id="ad" placeholder="Description"></textarea><input id="ao" placeholder="Offer"><input id="ab" type="number" placeholder="Daily budget"><input id="al" placeholder="Target location"><input id="aca" placeholder="Category"><button class="btn" onclick="ad()">SUBMIT CAMPAIGN</button></div>
+ </div>
 
-  <!-- WALLET -->
-  <section id="wallet" class="page hide">
-    <div class="card">
-      <h2>👛 JR PHEEF WALLET</h2>
-      <div class="grid">
-        <div class="tile"><small>Withdrawable</small><b id="cash">KSh 0</b></div>
-        <div class="tile"><small>Growth Credits</small><b id="credits">KSh 0</b></div>
-      </div>
-    </div>
-    <div class="card">
-      <h3>Withdraw</h3>
-      <input id="wa" type="number" placeholder="Amount — minimum KSh 200">
-      <input id="wp" placeholder="M-Pesa phone">
-      <button class="btn" onclick="withdraw()">REQUEST WITHDRAWAL</button>
-    </div>
-    <div id="tx" class="card"></div>
-  </section>
-
-  <!-- INVEST -->
-  <section id="invest" class="page hide">
-    <div class="card">
-      <h2>📈 JR PHEEF INVEST</h2>
-      <p>Growth Credits: <b id="icredits">KSh 0</b></p>
-      <p class="muted">Internal Growth Products — JR PHEEF & DGBO.</p>
-      <p class="pill">Other markets currently INACTIVE</p>
-    </div>
-    <div id="products"></div>
-    <div id="holdings" class="card"></div>
-  </section>
-
-  <!-- DGBO -->
-  <section id="dgbo" class="page hide">
-    <div class="card hero">
-      <div class="logo">DGBO</div>
-      <h2>BUSINESS CENTER</h2>
-      <p class="muted">Ideas. Strategy. Growth.</p>
-    </div>
-    <div class="grid">
-      <button class="tile" onclick="dgboForm('Business Idea')"><b>💡</b>Business Ideas</button>
-      <button class="tile" onclick="dgboForm('Grow My Business')"><b>📈</b>Grow My Business</button>
-      <button class="tile" onclick="dgboForm('Business Plan')"><b>📋</b>Business Plan</button>
-      <button class="tile" onclick="dgboForm('Funding')"><b>💰</b>Funding</button>
-      <button class="tile" onclick="dgboForm('Business for Sale')"><b>🏢</b>Business for Sale</button>
-      <button class="tile" onclick="dgboForm('Partnership')"><b>🤝</b>Partnership</button>
-      <button class="tile" onclick="dgboForm('Market Research')"><b>🔎</b>Market Research</button>
-      <button class="tile" onclick="dgboForm('Business Beyond Borders')"><b>🌍</b>Beyond Borders</button>
-    </div>
-    <div id="dgform" class="card hide">
-      <h3 id="dgt"></h3>
-      <input id="dgo" placeholder="Opportunity / business title">
-      <textarea id="dgd" placeholder="Explain your business, idea or opportunity"></textarea>
-      <input id="dga" type="number" placeholder="Amount if applicable">
-      <input id="dgl" placeholder="Location">
-      <input id="dgc" placeholder="Category">
-      <button class="btn" onclick="submitDGBO()">SEND TO DGBO</button>
-    </div>
-  </section>
-
-  <!-- ADS -->
-  <section id="adsPage" class="page hide">
-    <div class="card">
-      <h2>📢 ADVERTISE ON JR PHEEF</h2>
-      <input id="ac" placeholder="Company / business">
-      <input id="ah" placeholder="Headline">
-      <textarea id="ad" placeholder="Description"></textarea>
-      <input id="ao" placeholder="Offer">
-      <input id="ai" placeholder="Promotional image URL">
-      <input id="ab" type="number" placeholder="Daily budget">
-      <input id="al" placeholder="Target location">
-      <input id="acat" placeholder="Target category">
-      <button class="btn" onclick="advertise()">SUBMIT CAMPAIGN</button>
-    </div>
-  </section>
-
-  <!-- PROFILE -->
-  <section id="profile" class="page hide">
-    <div class="card">
-      <h2>👤 Profile</h2>
-      <div id="profileData"></div>
-      <h3>Theme</h3>
-      <div class="row">
-        <button class="btn" onclick="setTheme('blue')">🔵 Blue</button>
-        <button class="btn" onclick="setTheme('green')">🟢 Green</button>
-        <button class="btn dark" onclick="setTheme('black')">⚫ Black</button>
-        <button class="btn" onclick="setTheme('purple')">🟣 Purple</button>
-        <button class="btn" onclick="setTheme('gold')">🟡 Gold</button>
-      </div>
-    </div>
-  </section>
+ <div id="profile" class="page hide">
+  <div class="card"><h2>👤 PROFILE</h2><div id="prof"></div><h3>Theme</h3><div class="row">
+   <button class="btn" onclick="theme('blue')">🔵 Blue</button><button class="aqua" onclick="theme('aqua')">🩵 Aqua</button><button class="dark" onclick="theme('black')">⚫ Black</button><button class="btn" onclick="theme('green')">🟢 Green</button><button class="btn" onclick="theme('purple')">🟣 Purple</button><button class="btn" onclick="theme('gold')">🟡 Gold</button>
+  </div></div>
+ </div>
 
 </section>
 </main>
@@ -332,307 +197,45 @@ video{width:100%;border-radius:14px;background:#000;max-height:480px}
 <button onclick="page('dgbo')"><b>🧠</b>DGBO</button>
 </nav>
 
-<div id="toast" class="toast"></div>
-
 <script>
-let T=localStorage.getItem("jr_token"),ME=null,ROOM=null;
-
-const $=id=>document.getElementById(id);
-const api=async(url,opt={})=>{
- opt.headers={...(opt.headers||{}),"Content-Type":"application/json"};
- if(T)opt.headers.Authorization="Bearer "+T;
- try{
-  const r=await fetch(url,opt),d=await r.json();
-  if(!r.ok)throw Error(d.error||"Request failed");
-  return d;
- }catch(e){
-  toast(e.message);
-  throw e;
- }
-};
-function toast(x){$("toast").textContent=x;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",3000)}
-function google(){location.href="/api/auth/google"}
-function save(){localStorage.setItem("jr_token",T)}
-function logout(){localStorage.removeItem("jr_token");location.reload()}
-
-async function signup(){
- if(!$("terms").checked)return toast("Please accept the Terms & Conditions.");
- try{
-  const d=await api("/api/auth/signup",{method:"POST",body:JSON.stringify({
-   name:$("sn").value,email:$("se").value,password:$("sp").value,
-   phone:$("sphone").value,birth_year:$("sy").value,
-   referral_code:$("ref").value,terms_agreed:true
-  })});
-  T=d.token;save();start(d.user);
- }catch{}
-}
-async function login(){
- try{
-  const d=await api("/api/auth/login",{method:"POST",body:JSON.stringify({email:$("le").value,password:$("lp").value})});
-  T=d.token;save();start(d.user);
- }catch{}
-}
-async function start(u){
- ME=u;$("auth").classList.add("hide");$("app").classList.remove("hide");$("nav").classList.remove("hide");
- $("hello").textContent="Hi, "+(u.name||"there")+" 👋";
- profile();loadHome();
-}
-async function profile(){
- if(!ME)return;
- $("profileData").innerHTML=`
- <p><b>Name:</b> ${esc(ME.name)}</p>
- <p><b>Email:</b> ${esc(ME.email||"Not linked")}</p>
- <p><b>Phone:</b> ${esc(ME.phone||"")}</p>
- <p><b>Membership:</b> ${esc(ME.membership||"FREE+")}</p>
- <p><b>Referral:</b> ${esc(ME.referral_code||"")}</p>`;
-}
-function esc(x){return String(x||"").replace(/[&<>"]/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[a]))}
-
-function page(p){
- document.querySelectorAll(".page").forEach(x=>x.classList.add("hide"));
- $(p).classList.remove("hide");
- if(p==="market")loadMarket();
- if(p==="shorts")loadShorts();
- if(p==="work"){loadTasks();loadTalent()}
- if(p==="deals")loadDeals();
- if(p==="wallet")loadWallet();
- if(p==="invest")loadInvest();
- if(p==="profile")profile();
- if(p==="home")loadHome();
- if(p==="adsPage"){}
- scrollTo(0,0);
-}
-
-async function loadHome(){
- try{
-  const d=await api("/api/ads");
-  $("ads").innerHTML=(d.data||[]).slice(0,5).map(a=>`
-   <div class="card">
-    <span class="pill">SPONSORED</span>
-    <h3>${esc(a.headline||a.company)}</h3>
-    <p>${esc(a.description)}</p>
-    ${a.promotional_image?`<img src="${esc(a.promotional_image)}" style="width:100%;border-radius:12px">`:""}
-   </div>`).join("")||"<p class='muted'>No promotions yet.</p>";
- }catch{}
-}
-
-async function find(){
- const q=$("search").value.trim();
- if(!q)return;
- page("market");$("mq").value=q;loadMarket();
-}
-
-async function loadMarket(){
- try{
-  const q=encodeURIComponent($("mq").value||"");
-  const d=await api("/api/listings?q="+q);
-  $("marketList").innerHTML=(d.data||[]).map(x=>`
-   <div class="card">
-    <span class="pill">${esc(x.category||"Marketplace")}</span>
-    <h3>${esc(x.title)}</h3>
-    <p>${esc(x.description)}</p>
-    <div class="price">KSh ${Number(x.price||0).toLocaleString()}</div>
-    <p class="muted">📍 ${esc(x.location)} ${x.country?"• "+esc(x.country):""}</p>
-    <button class="btn" onclick="connect('${x.user_id}','${x.id}')">CHAT / MATCH</button>
-   </div>`).join("")||"<div class='card'>Nothing found yet.</div>";
- }catch{}
-}
-
-async function sell(){
- try{
-  const imgs=$("limgs").value.split(",").map(x=>x.trim()).filter(Boolean);
-  const d=await api("/api/listings",{method:"POST",body:JSON.stringify({
-   title:$("lt").value,description:$("ld").value,price:Number($("lprice").value),
-   location:$("lloc").value,country:$("lcountry").value,category:$("lcat").value,images:imgs
-  })});
-  toast("Listing published.");$("lt").value="";loadMarket();
- }catch{}
-}
-
-async function connect(seller_id,listing_id){
- try{
-  const d=await api("/api/deals",{method:"POST",body:JSON.stringify({seller_id,listing_id})});
-  toast("Deal Room created.");page("deals");
- }catch{}
-}
-
-async function loadDeals(){
- try{
-  const d=await api("/api/deals");
-  $("dealList").innerHTML=(d.data||[]).map(x=>`
-   <div class="card">
-    <div class="between"><b>Deal Room</b><span class="pill">${esc(x.status)}</span></div>
-    <button class="btn" onclick="openRoom('${x.id}')">OPEN CHAT</button>
-   </div>`).join("")||"<div class='card'>No Deal Rooms yet.</div>";
- }catch{}
-}
-async function openRoom(id){
- ROOM=id;$("chatBox").classList.remove("hide");loadMessages();
-}
-async function loadMessages(){
- const d=await api("/api/deals/"+ROOM+"/messages");
- $("messages").innerHTML=(d.data||[]).map(x=>`<div class="msg ${x.sender_id===ME.id?"mine":""}">${esc(x.message)}</div>`).join("");
- $("messages").scrollTop=$("messages").scrollHeight;
-}
-async function sendMessage(){
- const m=$("message").value.trim();if(!m)return;
- try{await api("/api/deals/"+ROOM+"/messages",{method:"POST",body:JSON.stringify({message:m})});$("message").value="";loadMessages()}catch{}
-}
-
-async function postShort(){
- try{
-  await api("/api/shorts",{method:"POST",body:JSON.stringify({
-   video_url:$("sv").value,caption:$("sc").value,category:$("scc").value
-  })});
-  toast("Short submitted for safety review.");
- }catch{}
-}
-async function loadShorts(){
- try{
-  const d=await api("/api/shorts");
-  $("shortList").innerHTML=(d.data||[]).map(x=>`
-   <div class="card">
-    <video controls src="${esc(x.video_url)}"></video>
-    <p>${esc(x.caption)}</p>
-   </div>`).join("")||"<div class='card'>No Shorts yet.</div>";
- }catch{}
-}
-
-async function task(){
- try{
-  await api("/api/tasks",{method:"POST",body:JSON.stringify({
-   title:$("tt").value,description:$("td").value,budget:Number($("tb").value),
-   location:$("tl").value,skill:$("ts").value,urgency:$("tu").value
-  })});
-  toast("Task posted.");loadTasks();
- }catch{}
-}
-async function loadTasks(){
- try{
-  const d=await api("/api/tasks");
-  $("tasks").innerHTML=(d.data||[]).map(x=>`
-   <div class="card"><b>${esc(x.title)}</b><p>${esc(x.description)}</p>
-   <span class="pill">${esc(x.status)}</span> <span class="price">KSh ${Number(x.budget||0).toLocaleString()}</span></div>`).join("");
- }catch{}
-}
-async function talent(){
- try{
-  await api("/api/talent",{method:"POST",body:JSON.stringify({
-   skills:$("skills").value,location:$("wloc").value,experience:$("exp").value,availability:$("avail").value
-  })});toast("Talent profile saved.");loadTalent();
- }catch{}
-}
-async function loadTalent(){
- try{
-  const d=await api("/api/talent");
-  $("talents").innerHTML=(d.data||[]).map(x=>`
-   <div class="card"><h3>👤 Talent</h3><p>Skills: ${esc(x.skills)}</p>
-   <p>📍 ${esc(x.location)}</p><span class="pill">${esc(x.availability)}</span></div>`).join("");
- }catch{}
-}
-
-async function delivery(){
- try{
-  await api("/api/delivery",{method:"POST",body:JSON.stringify({
-   pickup:$("pickup").value,dropoff:$("dropoff").value,
-   provider:$("provider").value,price:Number($("dprice").value)
-  })});toast("Delivery request submitted.");
- }catch{}
-}
-
-async function loadWallet(){
- try{
-  const d=await api("/api/wallet");
-  $("cash").textContent="KSh "+Number(d.cash||0).toLocaleString();
-  $("credits").textContent="KSh "+Number(d.credits||0).toLocaleString();
-  $("tx").innerHTML="<h3>Recent activity</h3>"+(d.transactions||[]).map(x=>`<p>${esc(x.description||x.type)} — KSh ${Number(x.amount||0).toLocaleString()}</p>`).join("");
- }catch{}
-}
-async function withdraw(){
- try{
-  await api("/api/withdraw",{method:"POST",body:JSON.stringify({amount:Number($("wa").value),phone:$("wp").value})});
-  toast("Withdrawal submitted for processing.");loadWallet();
- }catch{}
-}
-
-async function loadInvest(){
- try{
-  const d=await api("/api/invest");
-  $("icredits").textContent="KSh "+Number(d.growth_credits||0).toLocaleString();
-  $("products").innerHTML=(d.products||[]).map(x=>`
-   <div class="card">
-    <div class="between"><h3>${esc(x.name)}</h3><span class="pill">${esc(x.status)}</span></div>
-    <p>${esc(x.description)}</p>
-    <p>Unit price: <b>KSh ${Number(x.unit_price||0).toLocaleString()}</b></p>
-    <button class="btn" ${!x.active?"disabled":""} onclick="invest('${x.id}')">INVEST</button>
-   </div>`).join("")+
-   ["NSE","Global Stocks","ETFs","Funds","Bonds","Other"].map(x=>`<div class="card"><b>🔒 ${x}</b><p class="muted">INACTIVE — provider/regulatory connection required.</p></div>`).join("");
-  $("holdings").innerHTML="<h3>Your Holdings</h3>"+(d.holdings||[]).map(x=>`<p>${Number(x.units||0)} units — KSh ${Number(x.current_value||0).toLocaleString()}</p>`).join("");
- }catch{}
-}
-async function invest(id){
- const amount=prompt("How much of your JR PHEEF Growth Credits do you want to invest?");
- if(!amount)return;
- if(!confirm("Confirm investment of KSh "+amount+"?"))return;
- try{
-  await api("/api/invest/buy",{method:"POST",body:JSON.stringify({product_id:id,amount:Number(amount)})});
-  toast("Investment approved and recorded.");loadInvest();loadWallet();
- }catch{}
-}
-
-function dgboForm(type){
- $("dgform").classList.remove("hide");$("dgt").textContent=type;
-}
-async function submitDGBO(){
- try{
-  await api("/api/dgbo/opportunities",{method:"POST",body:JSON.stringify({
-   title:$("dgo").value,description:$("dgd").value,amount:Number($("dga").value),
-   location:$("dgl").value,category:$("dgc").value,type:$("dgt").textContent
-  })});toast("Submitted to DGBO for review.");$("dgform").classList.add("hide");
- }catch{}
-}
-
-async function advertise(){
- try{
-  await api("/api/ads",{method:"POST",body:JSON.stringify({
-   company:$("ac").value,headline:$("ah").value,description:$("ad").value,
-   offer:$("ao").value,promotional_image:$("ai").value,
-   daily_budget:Number($("ab").value),target_location:$("al").value,
-   target_category:$("acat").value
-  })});toast("Advertising campaign submitted for review.");
- }catch{}
-}
-
-function theme(){
- const t=prompt("Choose: blue, green, black, purple or gold",localStorage.getItem("jr_theme")||"blue");
- if(t)setTheme(t.toLowerCase());
-}
-function setTheme(t){
- const colors={
-  blue:["#087cff","#071a33"],green:["#12a150","#06351e"],
-  black:["#111","#000"],purple:["#7c3aed","#241044"],gold:["#b8860b","#332500"]
- };
- if(!colors[t])return;
- document.documentElement.style.setProperty("--p",colors[t][0]);
- document.documentElement.style.setProperty("--dark",colors[t][1]);
- localStorage.setItem("jr_theme",t);
-}
-
-function offline(){
- const x=!navigator.onLine;
- $("offline").classList.toggle("hide",!x);
- $("net").textContent=x?"OFFLINE":"ONLINE";
- $("net").style.background=x?"#fff0d0":"#e7f8ee";
-}
-window.addEventListener("online",offline);window.addEventListener("offline",offline);
-
-(async()=>{
- setTheme(localStorage.getItem("jr_theme")||"blue");offline();
- if(T){
-  try{const d=await api("/api/me");start(d.user)}
-  catch{logout()}
- }
-})();
+let T=localStorage.jrToken,U=null,R=null;
+const $=x=>document.getElementById(x),esc=x=>String(x??"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+async function api(u,o={}){o.headers={...(o.headers||{}),Authorization:T?"Bearer "+T:"","Content-Type":"application/json"};let r=await fetch(u,o),d=await r.json();if(!r.ok)throw Error(d.error||"Error");return d}
+function msg(x){alert(x)}
+async function signup(){try{if(!$("agree").checked)return msg("Accept the Terms first.");let d=await api("/api/auth/signup",{method:"POST",body:JSON.stringify({name:$("name").value,email:$("se").value,password:$("sp").value,phone:$("phone").value,birth_year:$("year").value,referral_code:$("ref").value,terms_agreed:true})});T=d.token;localStorage.jrToken=T;start(d.user)}catch(e){msg(e.message)}}
+async function login(){try{let d=await api("/api/auth/login",{method:"POST",body:JSON.stringify({email:$("email").value,password:$("pass").value})});T=d.token;localStorage.jrToken=T;start(d.user)}catch(e){msg(e.message)}}
+async function google(){let d=await api("/api/auth/google");location=d.url}
+async function start(u){U=u;$("auth").classList.add("hide");$("app").classList.remove("hide");$("nav").classList.remove("hide");$("hello").textContent="Hi, "+u.name+" 👋";profile();home()}
+function page(x){document.querySelectorAll(".page").forEach(e=>e.classList.add("hide"));$(x).classList.remove("hide");if(x=="market")loadMarket();if(x=="shorts")loadShorts();if(x=="work"){loadTasks();loadTalent()}if(x=="deals")loadDeals();if(x=="wallet")wallet();if(x=="invest")invest();if(x=="profile")profile();scrollTo(0,0)}
+async function home(){try{$("ads").innerHTML=(await api("/api/ads")).data.map(a=>`<div class="card"><span class="pill">SPONSORED</span><h3>${esc(a.headline||a.company)}</h3><p>${esc(a.description||"")}</p></div>`).join("")||"<p class=muted>No promotions yet.</p>"}catch{}}
+function market(){$("mq").value=$("search").value;page("market")}
+async function loadMarket(){try{let d=await api("/api/listings?q="+encodeURIComponent($("mq").value||""));$("marketList").innerHTML=d.data.map(x=>`<div class="card"><span class=pill>${esc(x.category||"MARKET")}</span><h3>${esc(x.title)}</h3><p>${esc(x.description)}</p><div class=price>KSh ${Number(x.price).toLocaleString()}</div><p class=muted>📍 ${esc(x.location||"")}</p><button class=btn onclick="connect('${x.user_id}','${x.id}')">MATCH / CHAT</button></div>`).join("")||"<div class=card>Nothing found.</div>"}catch(e){msg(e.message)}}
+async function connect(s,l){try{await api("/api/deals",{method:"POST",body:JSON.stringify({seller_id:s,listing_id:l})});page("deals")}catch(e){msg(e.message)}}
+async function files(ids,folder){let out=[];for(let f of $(ids).files){let d=await new Promise(r=>{let x=new FileReader();x.onload=()=>r(x.result);x.readAsDataURL(f)});out.push((await api("/api/upload",{method:"POST",body:JSON.stringify({data:d,name:f.name,type:f.type,folder})})).url)}return out}
+async function sell(){try{let im=await files("lf","listings");if(im.length<3||im.length>20)throw Error("Choose 3 to 20 photos.");await api("/api/listings",{method:"POST",body:JSON.stringify({title:$("lt").value,description:$("ld").value,price:Number($("lp").value),location:$("ll").value,country:$("lc").value,category:$("lcat").value,images:im})});msg("Listing published.");loadMarket()}catch(e){msg(e.message)}}
+async function short(){try{let im=await files("sv","shorts");if(im.length!=1)throw Error("Choose one video.");await api("/api/shorts",{method:"POST",body:JSON.stringify({video_url:im[0],caption:$("sc").value,category:$("sct").value})});msg("Short submitted for review.")}catch(e){msg(e.message)}}
+async function loadShorts(){try{let d=await api("/api/shorts");$("shortList").innerHTML=d.data.map(x=>`<div class=card><video controls src="${esc(x.video_url)}"></video><p>${esc(x.caption)}</p></div>`).join("")||"<div class=card>No approved Shorts yet.</div>"}catch{}}
+async function task(){try{await api("/api/tasks",{method:"POST",body:JSON.stringify({title:$("tt").value,description:$("td").value,budget:Number($("tb").value),location:$("tl").value,skill:$("tsk").value})});msg("Task posted.")}catch(e){msg(e.message)}}
+async function loadTasks(){try{$("tasks").innerHTML=(await api("/api/tasks")).data.map(x=>`<div class=card><b>${esc(x.title)}</b><p>${esc(x.description)}</p><span class=pill>${esc(x.status)}</span></div>`).join("")}catch{}}
+async function talent(){try{await api("/api/talent",{method:"POST",body:JSON.stringify({skills:$("ws").value,location:$("wl").value,experience:$("we").value})});msg("Talent profile saved.")}catch(e){msg(e.message)}}
+async function loadTalent(){try{$("talents").innerHTML=(await api("/api/talent")).data.map(x=>`<div class=card><b>Freelancer</b><p>${esc(x.skills)}</p><p>${esc(x.location)}</p></div>`).join("")}catch{}}
+async function loadDeals(){try{$("dealList").innerHTML=(await api("/api/deals")).data.map(x=>`<div class=card><span class=pill>${esc(x.status)}</span><button class=btn onclick="openRoom('${x.id}')">OPEN DEAL ROOM</button></div>`).join("")||"<div class=card>No Deal Rooms.</div>"}catch{}}
+async function openRoom(id){R=id;$("chat").classList.remove("hide");loadMessages()}
+async function loadMessages(){$("msgs").innerHTML=(await api("/api/deals/"+R+"/messages")).data.map(x=>`<div class="msg ${x.sender_id==U.id?"mine":""}">${esc(x.message)}</div>`).join("")}
+async function send(){let m=$("message").value.trim();if(!m)return;try{await api("/api/deals/"+R+"/messages",{method:"POST",body:JSON.stringify({message:m})});$("message").value="";loadMessages()}catch(e){msg(e.message)}}
+async function deliver(){try{await api("/api/delivery",{method:"POST",body:JSON.stringify({pickup:$("pick").value,dropoff:$("drop").value,provider:$("prov").value})});msg("Delivery requested.")}catch(e){msg(e.message)}}
+async function wallet(){try{let d=await api("/api/wallet");$("cash").textContent="KSh "+d.cash.toLocaleString();$("cred").textContent="KSh "+d.credits.toLocaleString()}catch{}}
+async function withdraw(){try{await api("/api/withdraw",{method:"POST",body:JSON.stringify({amount:Number($("wa").value),phone:$("wp").value})});msg("Withdrawal pending confirmation.")}catch(e){msg(e.message)}}
+async function invest(){try{let d=await api("/api/invest");$("ig").textContent="KSh "+d.growth_credits.toLocaleString();$("products").innerHTML=d.products.map(x=>`<div class=card><h3>${esc(x.name)}</h3><p>${esc(x.description||"")}</p><p>Unit: KSh ${Number(x.unit_price).toLocaleString()}</p><span class=pill>${esc(x.status)}</span>${x.active?`<button class=btn onclick="buy('${x.id}')">INVEST</button>`:""}</div>`).join("")+["NSE","Global Stocks","ETFs","Funds","Bonds"].map(x=>`<div class=card>🔒 ${x}<p class=muted>INACTIVE</p></div>`).join("");$("holdings").innerHTML="<h3>Your Holdings</h3>"+d.holdings.map(x=>`<p>${Number(x.units).toFixed(4)} units — KSh ${Number(x.current_value||0).toLocaleString()}</p>`).join("")}catch{}}
+async function buy(id){let a=prompt("Amount from Growth Credits:");if(!a)return;if(!confirm("Confirm KSh "+a+" investment?"))return;try{await api("/api/invest/buy",{method:"POST",body:JSON.stringify({product_id:id,amount:Number(a)})});msg("Investment recorded.");invest();wallet()}catch(e){msg(e.message)}}
+function dg(x){$("dgform").classList.remove("hide");$("dgt").textContent=x}
+async function sendDG(){try{await api("/api/dgbo/opportunities",{method:"POST",body:JSON.stringify({title:$("dgo").value,description:$("dgd").value,amount:Number($("dga").value),location:$("dgl").value,category:$("dgc").value,type:$("dgt").textContent})});msg("Sent to DGBO for review.")}catch(e){msg(e.message)}}
+async function ad(){try{await api("/api/ads",{method:"POST",body:JSON.stringify({company:$("ac").value,headline:$("ah").value,description:$("ad").value,offer:$("ao").value,daily_budget:Number($("ab").value),target_location:$("al").value,target_category:$("aca").value})});msg("Advertising campaign submitted.")}catch(e){msg(e.message)}}
+function profile(){$("prof").innerHTML=`<p><b>Name:</b> ${esc(U.name)}</p><p><b>Email:</b> ${esc(U.email||"")}</p><p><b>Phone:</b> ${esc(U.phone||"")}</p><p><b>Membership:</b> ${esc(U.membership||"FREE+")}</p>`}
+function theme(x){let c={blue:["#087CFF","#00C2FF"],aqua:["#00C2FF","#087CFF"],black:["#111","#000"],green:["#13A65A","#087CFF"],purple:["#7C3AED","#087CFF"],gold:["#B8860B","#061A33"]}[x];if(!c)return;document.documentElement.style.setProperty("--blue",c[0]);document.documentElement.style.setProperty("--aqua",c[1]);localStorage.jrTheme=x}
+function net(){let o=!navigator.onLine;$("offline").classList.toggle("hide",!o);$("net").textContent=o?"OFFLINE":"ONLINE"}
+window.addEventListener("online",net);window.addEventListener("offline",net);
+(async()=>{theme(localStorage.jrTheme||"blue");net();let p=new URLSearchParams(location.search);if(p.get("token")){T=p.get("token");localStorage.jrToken=T;history.replaceState({}, "", "/")}if(T)try{let d=await api("/api/me");start(d.user)}catch{localStorage.removeItem("jrToken");T=null}})();
 </script>
 </body>
-     </html>
+    </html>
