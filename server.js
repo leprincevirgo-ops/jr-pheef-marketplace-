@@ -1,1483 +1,502 @@
-const express = require("express");
-const path = require("path");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const rateLimit = require("express-rate-limit");
-const { createClient } = require("@supabase/supabase-js");
-const twilio = require("twilio");
+const express=require("express");
+const {createClient}=require("@supabase/supabase-js");
+const bcrypt=require("bcryptjs");
+const jwt=require("jsonwebtoken");
+const rateLimit=require("express-rate-limit");
+const twilio=require("twilio");
+const path=require("path");
 
-const app = express();
+const app=express();
+app.use(express.json({limit:"20mb"}));
+app.use(express.urlencoded({extended:false}));
+app.use(express.static(path.join(__dirname,"public")));
+app.use(rateLimit({windowMs:15*60*1000,max:500}));
 
-app.use(express.json({ limit: "8mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, "public")));
+const PORT=process.env.PORT||10000;
+const URL=process.env.SUPABASE_URL;
+const KEY=process.env.SUPABASE_SERVICE_ROLE_KEY||process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_KEY;
+const JWT=process.env.JWT_SECRET||"change-this-secret";
+const OWNER=process.env.OWNER_KEY||"change-owner-key";
+const BUCKET=process.env.SUPABASE_BUCKET||"jr-pheef";
+const sb=createClient(URL,KEY);
+const tw=process.env.TWILIO_ACCOUNT_SID?twilio(process.env.TWILIO_ACCOUNT_SID,process.env.TWILIO_AUTH_TOKEN):null;
 
-const PORT = process.env.PORT || 10000;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const JWT_SECRET = process.env.JWT_SECRET;
-const OWNER_KEY = process.env.OWNER_KEY || "";
+const money=n=>Number(n||0).toLocaleString("en-KE");
+const phone=x=>String(x||"").replace(/^whatsapp:/i,"").trim();
+const clean=x=>String(x||"").trim();
+const token=u=>jwt.sign({id:u.id,role:u.role||"user"},JWT,{expiresIn:"30d"});
+const esc=x=>String(x||"").replace(/[&<>"]/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[a]));
+const twiml=x=>`<Response><Message>${esc(x)}</Message></Response>`;
 
-if (!SUPABASE_URL || !SUPABASE_KEY || !JWT_SECRET) {
-  console.error("Missing SUPABASE_URL, SUPABASE_KEY or JWT_SECRET");
-  process.exit(1);
+async function user(id){
+ const {data}=await sb.from("members").select("*").eq("id",id).maybeSingle();
+ return data;
+}
+async function auth(req,res,next){
+ try{
+  const h=req.headers.authorization||"";
+  if(!h.startsWith("Bearer "))throw 0;
+  const x=jwt.verify(h.slice(7),JWT);
+  if(x.role==="owner"){req.user={id:"OWNER",role:"owner",name:"ROBERT"};return next();}
+  req.user=await user(x.id);
+  if(!req.user)throw 0;
+  next();
+ }catch{res.status(401).json({error:"Login required"});}
+}
+const owner=(req,res,next)=>req.user?.role==="owner"?next():res.status(403).json({error:"Owner only"});
+
+function contactBlocked(v){
+ const s=clean(v).toLowerCase();
+ return /(\+?\d[\d\s().-]{7,}\d|(?:zero|oh|o)\s*(?:one|1)\s*(?:two|2)|whatsapp|telegram|signal|call\s+me|text\s+me|dm\s+me|email\s+me|@\s*(gmail|yahoo|outlook)|\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b|instagram|tiktok|facebook|snapchat)/i.test(s);
+}
+function safeText(v){
+ if(contactBlocked(v))throw Error("Contact information is not allowed here. Use JR PHEEF CHAT.");
+ return clean(v);
+}
+function km(a,b,c,d){
+ const R=6371,rad=x=>x*Math.PI/180;
+ const x=rad(c-a),y=rad(d-b);
+ return R*2*Math.asin(Math.sqrt(Math.sin(x/2)**2+Math.cos(rad(a))*Math.cos(rad(c))*Math.sin(y/2)**2));
+}
+async function log(userId,action,table="",record="",details={}){
+ await sb.from("audit_logs").insert({owner_id:userId==="OWNER"?null:userId,action,table_name:table,record_id:record,details});
+}
+async function wallet(id){
+ const {data}=await sb.from("wallet_transactions").select("amount,type").eq("user_id",id);
+ let cash=0,credits=0;
+ (data||[]).forEach(x=>{
+  const n=Number(x.amount||0);
+  if(["GROWTH_CREDIT","CREDIT"].includes(x.type))credits+=n;else cash+=n;
+ });
+ return {cash,credits};
+}
+async function upload(file,userId,folder="uploads"){
+ const m=String(file||"").match(/^data:(.+);base64,(.+)$/);
+ if(!m)throw Error("Invalid file");
+ const ext=(m[1].split("/")[1]||"bin").split(";")[0];
+ const name=`${folder}/${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+ const {error}=await sb.storage.from(BUCKET).upload(name,Buffer.from(m[2],"base64"),{contentType:m[1],upsert:false});
+ if(error)throw error;
+ return sb.storage.from(BUCKET).getPublicUrl(name).data.publicUrl;
 }
 
-const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+/* HEALTH */
+app.get("/",(q,r)=>r.json({app:"JR PHEEF",tagline:"Find. Match. Trade.",status:"LIVE"}));
+app.get("/api/health",(q,r)=>r.json({ok:true,time:new Date().toISOString()}));
 
-app.use("/api/", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 150,
-  standardHeaders: true
-}));
+/* AUTH */
+app.post("/api/auth/signup",async(req,res)=>{
+ try{
+  const {name,email,password,phone,birth_year,terms_agreed}=req.body;
+  if(!name||!email||!password||!phone||!birth_year||!terms_agreed)return res.status(400).json({error:"Complete signup and accept Terms."});
+  const exists=await sb.from("members").select("id").or(`email.eq.${email},phone.eq.${phone}`).maybeSingle();
+  if(exists.data)return res.status(409).json({error:"Account already exists."});
+  const referral_code="JRP-"+Math.random().toString(36).slice(2,8).toUpperCase();
+  const hash=await bcrypt.hash(password,10);
+  const {data,error}=await sb.from("members").insert({
+   name,email:email.toLowerCase(),phone,password_hash:hash,birth_year,
+   role:"user",membership:"FREE+",referral_code,
+   terms_agreed_at:new Date().toISOString()
+  }).select().single();
+  if(error)throw error;
+  await log(data.id,"SIGNUP","members",data.id);
+  res.json({token:token(data),user:data});
+ }catch(e){res.status(400).json({error:e.message});}
+});
 
-const id = () =>
-  Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+app.post("/api/auth/login",async(req,res)=>{
+ try{
+  const {email,password}=req.body;
+  const {data}=await sb.from("members").select("*").eq("email",String(email).toLowerCase()).maybeSingle();
+  if(!data||!(await bcrypt.compare(password,data.password_hash)))return res.status(401).json({error:"Invalid login"});
+  await sb.from("members").update({last_active_at:new Date().toISOString()}).eq("id",data.id);
+  res.json({token:token(data),user:data});
+ }catch(e){res.status(400).json({error:e.message});}
+});
 
-const cleanPhone = p => String(p || "").replace(/[^\d+]/g, "");
-
-const token = (u, role = "user") =>
-  jwt.sign({ id: u.id, role }, JWT_SECRET, { expiresIn: "7d" });
-
-const plans = {
-  free:  { name: "FREE+", price: 0,   connection: 30 },
-  pro:   { name: "PRO",   price: 99,  connection: 20 },
-  prime: { name: "PRIME", price: 149, connection: 15 },
-  elite: { name: "ELITE", price: null, connection: null }
-};
-
-const skills = [
-  "plumbing","electrical","construction","painting","carpentry",
-  "welding","cleaning","driving","moving","delivery","technology",
-  "software","it","graphic design","photography","video",
-  "marketing","sales","accounting","consulting","repair","installation"
-];
-
-const skillMatch = text => {
-  const t = String(text || "").toLowerCase();
-  return skills.find(s => t.includes(s)) || "general";
-};
-
-const containsPhone = text =>
-  /(?:\+?254|0)?7\d{8}/.test(String(text || "").replace(/\s/g, ""));
-
-const kenyaTime = () =>
-  new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Africa/Nairobi",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(new Date());
-
-const nightFree = () => {
-  const h = Number(kenyaTime().split(":")[0]);
-  return h >= 2 && h < 6;
-};
-
-async function getUser(uid) {
-  const { data, error } = await db
-    .from("members")
-    .select("*")
-    .eq("id", uid)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data;
-}
-
-async function auth(req, res, next) {
-  try {
-    const h = req.headers.authorization || "";
-
-    if (!h.startsWith("Bearer "))
-      return res.status(401).json({ error: "Login required" });
-
-    const decoded = jwt.verify(h.slice(7), JWT_SECRET);
-
-    if (decoded.role === "owner") {
-      req.owner = true;
-      return next();
-    }
-
-    const u = await getUser(decoded.id);
-
-    if (!u)
-      return res.status(401).json({ error: "Account not found" });
-
-    req.user = u;
-    next();
-  } catch {
-    res.status(401).json({ error: "Session expired" });
-  }
-}
-
-function ownerOnly(req, res, next) {
-  try {
-    const h = req.headers.authorization || "";
-
-    if (!h.startsWith("Bearer "))
-      return res.status(401).json({ error: "Owner login required" });
-
-    const x = jwt.verify(h.slice(7), JWT_SECRET);
-
-    if (x.role !== "owner")
-      return res.status(403).json({ error: "Owner access denied" });
-
-    req.owner = true;
-    next();
-  } catch {
-    res.status(401).json({ error: "Owner session expired" });
-  }
-}
-
-async function audit(action, actor, details = {}) {
-  await db.from("audit_logs").insert({
-    id: id(),
-    actor_id: actor || null,
-    action,
-    details
+/* GOOGLE */
+app.get("/api/auth/google",async(req,res)=>{
+ try{
+  const {data,error}=await sb.auth.signInWithOAuth({
+   provider:"google",
+   options:{redirectTo:process.env.GOOGLE_REDIRECT_URL||`${req.protocol}://${req.get("host")}/api/auth/callback`}
   });
-}
+  if(error)throw error;
+  res.redirect(data.url);
+ }catch(e){res.status(400).json({error:e.message});}
+});
+app.get("/api/auth/callback",(req,res)=>res.redirect("/?google=complete"));
 
-async function notify(userId, title, message, type = "system") {
-  if (!userId) return;
+app.get("/api/me",auth,async(req,res)=>res.json({user:req.user,wallet:await wallet(req.user.id)}));
 
-  await db.from("notifications").insert({
-    id: id(),
-    user_id: userId,
-    title,
-    message,
-    type,
-    read: false
-  });
-}
-
-/* =========================
-   HEALTH
-========================= */
-
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "JR PHEEF",
-    tagline: "Find. Match. Trade.",
-    mode: "operational",
-    payments: "provider_pending"
-  });
+/* STORAGE */
+app.post("/api/upload",auth,async(req,res)=>{
+ try{
+  const url=await upload(req.body.file,req.user.id,req.body.folder||"uploads");
+  res.json({url});
+ }catch(e){res.status(400).json({error:e.message});}
 });
 
-/* =========================
-   AUTH
-========================= */
+/* MARKETPLACE */
+app.get("/api/listings",auth,async(req,res)=>{
+ const q=clean(req.query.q);
+ let x=sb.from("listings").select("*").eq("status","ACTIVE").order("created_at",{ascending:false}).limit(100);
+ if(q)x=x.or(`title.ilike.%${q}%,description.ilike.%${q}%,category.ilike.%${q}%`);
+ const {data,error}=await x;
+ res.json({data:data||[],error:error?.message});
+});
+app.post("/api/listings",auth,async(req,res)=>{
+ try{
+  const {title,description,price,location,country,category,images=[],lat,lng}=req.body;
+  if(Number(price)<=100)throw Error("Minimum listing price is above KSh 100.");
+  if(images.length<3||images.length>20)throw Error("Upload 3 to 20 photos.");
+  safeText(title);safeText(description);safeText(location);
+  const {data,error}=await sb.from("listings").insert({
+   user_id:req.user.id,title,description,price,location,country,category,
+   images,status:"ACTIVE",lat,lng
+  }).select().single();
+  if(error)throw error;
+  await log(req.user.id,"CREATE","listings",data.id);
+  res.json(data);
+ }catch(e){res.status(400).json({error:e.message});}
+});
+app.patch("/api/listings/:id",auth,async(req,res)=>{
+ const {data,error}=await sb.from("listings").update(req.body).eq("id",req.params.id).eq("user_id",req.user.id).select().single();
+ res.status(error?400:200).json(error?{error:error.message}:data);
+});
+app.delete("/api/listings/:id",auth,async(req,res)=>{
+ const {error}=await sb.from("listings").update({status:"DELETED"}).eq("id",req.params.id).eq("user_id",req.user.id);
+ res.json({ok:!error,error:error?.message});
+});
 
-app.post("/api/signup", async (req, res) => {
-  try {
-    const {
-      name,
-      phone,
-      password,
-      birth_year,
-      referral_code,
-      terms
-    } = req.body;
-
-    if (!name || !phone || !password)
-      return res.status(400).json({ error: "Name, phone and password required" });
-
-    if (!terms)
-      return res.status(400).json({ error: "You must accept the Terms & Conditions" });
-
-    if (password.length < 6)
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
-
-    const p = cleanPhone(phone);
-
-    const existing = await db
-      .from("members")
-      .select("id")
-      .eq("phone", p)
-      .maybeSingle();
-
-    if (existing.data)
-      return res.status(409).json({ error: "Phone already registered" });
-
-    let referredBy = null;
-
-    if (referral_code) {
-      const ref = await db
-        .from("members")
-        .select("id")
-        .eq("referral_code", String(referral_code).toUpperCase())
-        .maybeSingle();
-
-      if (ref.data) referredBy = ref.data.id;
-    }
-
-    const uid = id();
-
-    const { data, error } = await db.from("members").insert({
-      id: uid,
-      name: String(name).trim(),
-      phone: p,
-      password_hash: await bcrypt.hash(password, 12),
-      birth_year: birth_year ? Number(birth_year) : null,
-      membership: "free",
-      credits: 0,
-      rewards: 0,
-      referral_code: `JRP-${uid.slice(-5).toUpperCase()}`,
-      referred_by: referredBy,
-      terms_agreed_at: new Date().toISOString()
-    }).select("*").single();
-
-    if (error) throw error;
-
-    if (referredBy) {
-      await db.from("referrals").insert({
-        id: id(),
-        referrer_id: referredBy,
-        referred_user_id: uid,
-        status: "REGISTERED",
-        reward: 0
-      });
-
-      await notify(
-        referredBy,
-        "New referral",
-        `${data.name} joined JR PHEEF using your referral code.`,
-        "referral"
-      );
-    }
-
-    await audit("USER_SIGNUP", uid);
-
-    res.json({
-      ok: true,
-      token: token(data),
-      user: safeUser(data)
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Signup failed" });
+/* NEARBY MATCHING */
+app.get("/api/match/nearby",auth,async(req,res)=>{
+ const lat=Number(req.query.lat),lng=Number(req.query.lng),limit=Number(req.query.limit||50);
+ const radii=[.01,.025,.05,.1,.25,.5,1,5,10,25,50,100,500];
+ const {data}=await sb.from("listings").select("*").eq("status","ACTIVE").limit(500);
+ const out=[];
+ for(const radius of radii){
+  for(const x of data||[]){
+   if(x.lat==null||x.lng==null||out.some(a=>a.id===x.id))continue;
+   const d=km(lat,lng,Number(x.lat),Number(x.lng));
+   if(d<=radius)out.push({...x,distance_km:d});
   }
+  if(out.length>=limit)break;
+ }
+ res.json(out.slice(0,limit));
 });
 
-app.post("/api/login", async (req, res) => {
-  try {
-    const p = cleanPhone(req.body.phone);
-
-    const { data } = await db
-      .from("members")
-      .select("*")
-      .eq("phone", p)
-      .maybeSingle();
-
-    if (!data)
-      return res.status(401).json({ error: "Invalid phone or password" });
-
-    const good = await bcrypt.compare(
-      String(req.body.password || ""),
-      data.password_hash
-    );
-
-    if (!good)
-      return res.status(401).json({ error: "Invalid phone or password" });
-
-    await audit("USER_LOGIN", data.id);
-
-    res.json({
-      ok: true,
-      token: token(data),
-      user: safeUser(data)
-    });
-  } catch {
-    res.status(500).json({ error: "Login failed" });
-  }
+/* CONTACT SHIELD */
+app.post("/api/safety/check",auth,(req,res)=>{
+ const blocked=contactBlocked(req.body.text);
+ res.json({allowed:!blocked,message:blocked?"Contact information is blocked. Use JR PHEEF tools.":"OK"});
 });
 
-app.get("/api/me", auth, async (req, res) => {
-  if (!req.user)
-    return res.json({ owner: true });
+/* SHORTS */
+app.get("/api/shorts",auth,async(req,res)=>{
+ const {data,error}=await sb.from("shorts").select("*").eq("status","PUBLISHED").order("created_at",{ascending:false}).limit(50);
+ res.json({data:data||[],error:error?.message});
+});
+app.post("/api/shorts",auth,async(req,res)=>{
+ try{
+  const {video_url,caption,category,listing_id,ad_id}=req.body;
+  if(!video_url)throw Error("Video required.");
+  safeText(caption);
+  const {data,error}=await sb.from("shorts").insert({
+   user_id:req.user.id,video_url,caption,category,listing_id,ad_id,status:"REVIEW"
+  }).select().single();
+  if(error)throw error;
+  await log(req.user.id,"SHORT_REVIEW","shorts",data.id);
+  res.json({message:"Short submitted for safety review.",short:data});
+ }catch(e){res.status(400).json({error:e.message});}
+});
 
-  res.json({
-    user: safeUser(req.user),
-    night_free_access: nightFree()
+/* TALENT / FREELANCERS */
+app.get("/api/talent",auth,async(req,res)=>{
+ const {data,error}=await sb.from("workers").select("*").order("rating",{ascending:false}).limit(100);
+ res.json({data:data||[],error:error?.message});
+});
+app.post("/api/talent",auth,async(req,res)=>{
+ const {skills,location,experience,availability}=req.body;
+ const {data,error}=await sb.from("workers").upsert({
+  user_id:req.user.id,skills,location,experience,availability
+ }).select().single();
+ res.status(error?400:200).json(error?{error:error.message}:data);
+});
+
+/* WORK */
+app.post("/api/tasks",auth,async(req,res)=>{
+ try{
+  const {title,description,location,budget,skill,urgency}=req.body;
+  safeText(title);safeText(description);safeText(location);
+  const {data,error}=await sb.from("tasks").insert({
+   owner_id:req.user.id,title,description,location,budget,skill,urgency,status:"MATCHING"
+  }).select().single();
+  if(error)throw error;
+  res.json(data);
+ }catch(e){res.status(400).json({error:e.message});}
+});
+app.get("/api/tasks",auth,async(req,res)=>{
+ const {data,error}=await sb.from("tasks").select("*").or(`owner_id.eq.${req.user.id},worker_id.eq.${req.user.id}`).order("created_at",{ascending:false});
+ res.json({data:data||[],error:error?.message});
+});
+
+/* DEAL ROOMS */
+app.post("/api/deals",auth,async(req,res)=>{
+ const {seller_id,listing_id,task_id}=req.body;
+ if(seller_id===req.user.id)return res.status(400).json({error:"You cannot connect with yourself."});
+ const {data,error}=await sb.from("deal_rooms").insert({
+  buyer_id:req.user.id,seller_id,listing_id,task_id,status:"OPEN"
+ }).select().single();
+ res.status(error?400:200).json(error?{error:error.message}:data);
+});
+app.get("/api/deals",auth,async(req,res)=>{
+ const {data,error}=await sb.from("deal_rooms").select("*").or(`buyer_id.eq.${req.user.id},seller_id.eq.${req.user.id}`).order("created_at",{ascending:false});
+ res.json({data:data||[],error:error?.message});
+});
+app.get("/api/deals/:id/messages",auth,async(req,res)=>{
+ const {data,error}=await sb.from("messages").select("*").eq("room_id",req.params.id).order("created_at");
+ res.json({data:data||[],error:error?.message});
+});
+app.post("/api/deals/:id/messages",auth,async(req,res)=>{
+ try{
+  const message=safeText(req.body.message);
+  const {data:room}=await sb.from("deal_rooms").select("*").eq("id",req.params.id).single();
+  if(!room||![room.buyer_id,room.seller_id].includes(req.user.id))throw Error("Not a Deal Room member.");
+  const {data,error}=await sb.from("messages").insert({room_id:room.id,sender_id:req.user.id,message}).select().single();
+  if(error)throw error;
+  res.json(data);
+ }catch(e){res.status(400).json({error:e.message});}
+});
+
+/* CONNECTION PAYMENT */
+app.post("/api/connections",auth,async(req,res)=>{
+ const amount=Number(req.body.amount||30);
+ const {data,error}=await sb.from("connections").insert({
+  room_id:req.body.room_id,user_id:req.user.id,amount,status:"PENDING"
+ }).select().single();
+ res.status(error?400:200).json(error?{error:error.message}:data);
+});
+
+/* WALLET */
+app.get("/api/wallet",auth,async(req,res)=>{
+ const w=await wallet(req.user.id);
+ const {data:tx}=await sb.from("wallet_transactions").select("*").eq("user_id",req.user.id).order("created_at",{ascending:false});
+ res.json({...w,transactions:tx||[]});
+});
+app.post("/api/withdraw",auth,async(req,res)=>{
+ const amount=Number(req.body.amount);
+ if(amount<200)return res.status(400).json({error:"Minimum withdrawal is KSh 200."});
+ const w=await wallet(req.user.id);
+ if(amount>w.cash)return res.status(400).json({error:"Insufficient withdrawable balance."});
+ const {data,error}=await sb.from("withdrawals").insert({
+  user_id:req.user.id,amount,phone:req.body.phone,status:"PENDING"
+ }).select().single();
+ res.status(error?400:200).json(error?{error:error.message}:{message:"Withdrawal submitted for processing.",withdrawal:data});
+});
+
+/* INVESTMENT */
+app.get("/api/invest",auth,async(req,res)=>{
+ const {data:products}=await sb.from("investment_products").select("*").order("name");
+ const {data:holdings}=await sb.from("investment_holdings").select("*").eq("user_id",req.user.id);
+ const w=await wallet(req.user.id);
+ res.json({
+  growth_credits:w.credits,
+  products:products||[],
+  holdings:holdings||[],
+  locked_markets:["NSE","GLOBAL_STOCKS","ETFS","FUNDS","BONDS","OTHER"]
+ });
+});
+app.post("/api/invest/buy",auth,async(req,res)=>{
+ try{
+  const amount=Number(req.body.amount),productId=req.body.product_id;
+  if(amount<=0)throw Error("Invalid amount.");
+  const w=await wallet(req.user.id);
+  if(amount>w.credits)throw Error("Insufficient JR PHEEF Growth Credits.");
+  const {data:p}=await sb.from("investment_products").select("*").eq("id",productId).single();
+  if(!p||!p.active||p.status!=="ACTIVE")throw Error("Investment product inactive.");
+  if(!p.allow_wallet_credits)throw Error("Wallet credits are not enabled for this product.");
+  if(amount<Number(p.min_investment||1))throw Error("Below minimum investment.");
+  const units=amount/Number(p.unit_price);
+  const {data:t,error}=await sb.from("investment_transactions").insert({
+   user_id:req.user.id,product_id:productId,type:"BUY",amount,units,
+   price:p.unit_price,status:"APPROVED",reference:"INV-"+Date.now()
+  }).select().single();
+  if(error)throw error;
+  await sb.from("wallet_transactions").insert({
+   user_id:req.user.id,amount:-amount,type:"INVESTMENT_PURCHASE",
+   description:`Investment in ${p.name}`,reference:t.reference
   });
-});
-
-function safeUser(u) {
-  if (!u) return null;
-
-  return {
-    id: u.id,
-    name: u.name,
-    phone: u.phone,
-    birth_year: u.birth_year,
-    membership: u.membership,
-    credits: Number(u.credits || 0),
-    rewards: Number(u.rewards || 0),
-    referral_code: u.referral_code,
-    created_at: u.created_at
-  };
-}
-
-/* =========================
-   MARKETPLACE
-========================= */
-
-app.get("/api/listings", async (req, res) => {
-  try {
-    let q = db
-      .from("listings")
-      .select("*")
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(100);
-
-    if (req.query.category)
-      q = q.ilike("category", `%${req.query.category}%`);
-
-    if (req.query.location)
-      q = q.ilike("location", `%${req.query.location}%`);
-
-    if (req.query.search)
-      q = q.or(
-        `title.ilike.%${req.query.search}%,description.ilike.%${req.query.search}%`
-      );
-
-    const { data, error } = await q;
-
-    if (error) throw error;
-
-    res.json({ listings: data || [] });
-  } catch (e) {
-    res.status(500).json({ error: "Could not load marketplace" });
-  }
-});
-
-app.post("/api/listings", auth, async (req, res) => {
-  try {
-    const {
-      title,
-      description,
-      price,
-      location,
-      category,
-      images,
-      market_scope
-    } = req.body;
-
-    const amount = Number(price);
-    const photos = Array.isArray(images) ? images : [];
-
-    if (!title || !description || !location || !category)
-      return res.status(400).json({ error: "Complete listing details required" });
-
-    if (!Number.isFinite(amount) || amount <= 100)
-      return res.status(400).json({ error: "Listing price must be above KSh 100" });
-
-    if (photos.length < 3)
-      return res.status(400).json({ error: "At least 3 photos are required" });
-
-    if (photos.length > 20)
-      return res.status(400).json({ error: "Maximum 20 photos allowed" });
-
-    const listing = {
-      id: id(),
-      user_id: req.user.id,
-      title: String(title).trim(),
-      description: String(description).trim(),
-      price: amount,
-      location: String(location).trim(),
-      category: String(category).trim(),
-      market_scope: market_scope || "local",
-      images: photos,
-      status: "active"
-    };
-
-    const { data, error } = await db
-      .from("listings")
-      .insert(listing)
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    await audit("LISTING_CREATED", req.user.id, {
-      listing_id: data.id
-    });
-
-    res.json({ ok: true, listing: data });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Listing failed" });
-  }
-});
-
-app.patch("/api/listings/:id", auth, async (req, res) => {
-  const { data: existing } = await db
-    .from("listings")
-    .select("*")
-    .eq("id", req.params.id)
-    .maybeSingle();
-
-  if (!existing || existing.user_id !== req.user.id)
-    return res.status(403).json({ error: "Not your listing" });
-
-  const allowed = [
-    "title",
-    "description",
-    "price",
-    "location",
-    "category",
-    "images",
-    "status"
-  ];
-
-  const update = {};
-
-  allowed.forEach(k => {
-    if (req.body[k] !== undefined) update[k] = req.body[k];
+  const {data:h}=await sb.from("investment_holdings").select("*").eq("user_id",req.user.id).eq("product_id",productId).maybeSingle();
+  if(h){
+   await sb.from("investment_holdings").update({
+    units:Number(h.units)+units,
+    invested_amount:Number(h.invested_amount)+amount,
+    current_value:Number(h.current_value)+amount,
+    avg_price:(Number(h.invested_amount)+amount)/(Number(h.units)+units)
+   }).eq("id",h.id);
+  }else await sb.from("investment_holdings").insert({
+   user_id:req.user.id,product_id:productId,units,invested_amount:amount,
+   current_value:amount,avg_price:p.unit_price
   });
-
-  const { data, error } = await db
-    .from("listings")
-    .update(update)
-    .eq("id", existing.id)
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Update failed" });
-
-  res.json({ ok: true, listing: data });
+  res.json({ok:true,units,amount});
+ }catch(e){res.status(400).json({error:e.message});}
 });
 
-/* =========================
-   MATCH ENGINE
-========================= */
+/* REFERRALS / COUPONS */
+app.get("/api/referrals",auth,async(req,res)=>{
+ const {data,error}=await sb.from("referrals").select("*").eq("referrer_id",req.user.id);
+ res.json({data:data||[],error:error?.message});
+});
+app.post("/api/coupons/check",auth,async(req,res)=>{
+ const {data,error}=await sb.from("coupons").select("*").eq("code",clean(req.body.code).toUpperCase()).eq("active",true).maybeSingle();
+ res.status(error?400:200).json(data||{valid:false});
+});
 
-app.get("/api/matches", auth, async (req, res) => {
-  try {
-    const { data: listings } = await db
-      .from("listings")
-      .select("*")
-      .eq("status", "active")
-      .neq("user_id", req.user.id)
-      .order("created_at", { ascending: false })
-      .limit(100);
+/* DELIVERY */
+app.post("/api/delivery",auth,async(req,res)=>{
+ try{
+  safeText(req.body.pickup);safeText(req.body.dropoff);
+  const {data,error}=await sb.from("delivery_requests").insert({
+   user_id:req.user.id,room_id:req.body.room_id,pickup:req.body.pickup,
+   dropoff:req.body.dropoff,provider:req.body.provider,status:"AVAILABLE",
+   price:req.body.price
+  }).select().single();
+  if(error)throw error;
+  res.json(data);
+ }catch(e){res.status(400).json({error:e.message});}
+});
+app.get("/api/delivery",auth,async(req,res)=>{
+ const {data,error}=await sb.from("delivery_requests").select("*").eq("user_id",req.user.id).order("created_at",{ascending:false});
+ res.json({data:data||[],error:error?.message});
+});
 
-    const query = String(req.query.q || "").toLowerCase();
+/* ADVERTISING */
+app.get("/api/ads",auth,async(req,res)=>{
+ const {data,error}=await sb.from("ads").select("*").eq("status","ACTIVE").order("created_at",{ascending:false});
+ res.json({data:data||[],error:error?.message});
+});
+app.post("/api/ads",auth,async(req,res)=>{
+ try{
+  safeText(req.body.company);safeText(req.body.headline);safeText(req.body.description);
+  const {data,error}=await sb.from("ads").insert({
+   user_id:req.user.id,company:req.body.company,logo:req.body.logo,
+   promotional_image:req.body.promotional_image,headline:req.body.headline,
+   description:req.body.description,offer:req.body.offer,cta:req.body.cta,
+   link:req.body.link,daily_budget:req.body.daily_budget,duration:req.body.duration,
+   target_location:req.body.target_location,target_category:req.body.target_category,
+   status:"PENDING",sponsored:true
+  }).select().single();
+  if(error)throw error;
+  res.json(data);
+ }catch(e){res.status(400).json({error:e.message});}
+});
 
-    const results = (listings || []).filter(x => {
-      const text =
-        `${x.title} ${x.description} ${x.category} ${x.location}`.toLowerCase();
+/* DGBO BUSINESS OPPORTUNITIES */
+app.post("/api/dgbo/opportunities",auth,async(req,res)=>{
+ try{
+  safeText(req.body.title);safeText(req.body.description);
+  const {data,error}=await sb.from("business_opportunities").insert({
+   owner_id:req.user.id,title:req.body.title,description:req.body.description,
+   type:req.body.type,amount:req.body.amount,location:req.body.location,
+   category:req.body.category,status:"REVIEW"
+  }).select().single();
+  if(error)throw error;
+  res.json({message:"Submitted to DGBO for review.",data});
+ }catch(e){res.status(400).json({error:e.message});}
+});
+app.get("/api/dgbo/opportunities",auth,async(req,res)=>{
+ const {data,error}=await sb.from("business_opportunities").select("*").eq("status","PUBLISHED").order("created_at",{ascending:false});
+ res.json({data:data||[],error:error?.message});
+});
 
-      return !query || text.includes(query);
-    });
+/* OFFLINE SYNC QUEUE */
+app.post("/api/sync",auth,async(req,res)=>{
+ const actions=Array.isArray(req.body.actions)?req.body.actions:[];
+ const results=[];
+ for(const a of actions){
+  try{
+   if(a.type==="MESSAGE"){
+    safeText(a.message);
+    await sb.from("messages").insert({room_id:a.room_id,sender_id:req.user.id,message:a.message});
+   }else if(a.type==="NOTIFICATION"){
+    await sb.from("notifications").insert({user_id:req.user.id,title:a.title,message:a.message});
+   }
+   results.push({id:a.id,ok:true});
+  }catch(e){results.push({id:a.id,ok:false,error:e.message});}
+ }
+ res.json({synced:results});
+});
 
-    res.json({
-      matches: results.slice(0, 30),
-      count: results.length
-    });
-  } catch {
-    res.status(500).json({ error: "Matching failed" });
+/* NOTIFICATIONS */
+app.get("/api/notifications",auth,async(req,res)=>{
+ const {data,error}=await sb.from("notifications").select("*").eq("user_id",req.user.id).order("created_at",{ascending:false}).limit(100);
+ res.json({data:data||[],error:error?.message});
+});
+
+/* REPORT */
+app.post("/api/report",auth,async(req,res)=>{
+ const {data,error}=await sb.from("reports").insert({
+  user_id:req.user.id,target_type:req.body.target_type,
+  target_id:req.body.target_id,reason:req.body.reason,status:"OPEN"
+ }).select().single();
+ res.status(error?400:200).json(error?{error:error.message}:data);
+});
+
+/* OWNER */
+app.post("/api/owner/login",(req,res)=>{
+ if(clean(req.body.key)!==OWNER)return res.status(401).json({error:"Invalid owner key"});
+ res.json({token:jwt.sign({id:"OWNER",role:"owner"},JWT,{expiresIn:"12h"})});
+});
+
+app.get("/api/owner/stats",auth,owner,async(req,res)=>{
+ const tables=["members","listings","deal_rooms","payments","tasks","delivery_requests","ads","shorts","reports","investment_transactions"];
+ const out={};
+ for(const t of tables){
+  const {count}=await sb.from(t).select("*",{count:"exact",head:true});
+  out[t]=count||0;
+ }
+ res.json(out);
+});
+
+app.get("/api/owner/:table",auth,owner,async(req,res)=>{
+ const allowed=["members","listings","deal_rooms","payments","tasks","workers","ads","shorts","reports","delivery_requests","investment_products","investment_transactions","investment_holdings","business_opportunities","coupons","platform_settings","audit_logs"];
+ if(!allowed.includes(req.params.table))return res.status(400).json({error:"Table not allowed"});
+ const {data,error}=await sb.from(req.params.table).select("*").order("created_at",{ascending:false}).limit(500);
+ res.json({data:data||[],error:error?.message});
+});
+app.patch("/api/owner/:table/:id",auth,owner,async(req,res)=>{
+ const allowed=["members","listings","tasks","workers","ads","shorts","reports","delivery_requests","investment_products","coupons","business_opportunities","platform_settings"];
+ if(!allowed.includes(req.params.table))return res.status(400).json({error:"Table not allowed"});
+ const {data,error}=await sb.from(req.params.table).update(req.body).eq("id",req.params.id).select().single();
+ if(!error)await log("OWNER","OWNER_EDIT",req.params.table,req.params.id,req.body);
+ res.status(error?400:200).json(error?{error:error.message}:data);
+});
+
+/* WHATSAPP */
+app.post("/api/webhook/whatsapp",async(req,res)=>{
+ try{
+  const p=phone(req.body.From),text=clean(req.body.Body);
+  if(!p)return res.type("text/xml").send(twiml("Welcome to JR PHEEF — Find. Match. Trade."));
+  const {data:u}=await sb.from("members").select("*").eq("phone",p).maybeSingle();
+  if(!u)return res.type("text/xml").send(twiml("Welcome to JR PHEEF.\nCreate your account at jr-pheef-marketplace.onrender.com"));
+  if(contactBlocked(text))return res.type("text/xml").send(twiml("🔐 Contact details are protected. Please use your JR PHEEF Deal Room."));
+  const up=text.toUpperCase();
+  let reply="JR PHEEF\n\nFind. Match. Trade.\n\nTry: FIND, DEALS, WORK, DELIVERY or HELP.";
+  if(up==="HELP")reply="JR PHEEF\n\nFIND — marketplace\nDEALS — your Deal Rooms\nWORK — tasks & talent\nDELIVERY — delivery\nSHORTS — video discovery";
+  if(up==="DEALS"){
+   const {data}=await sb.from("deal_rooms").select("id,status").or(`buyer_id.eq.${u.id},seller_id.eq.${u.id}`).order("created_at",{ascending:false}).limit(10);
+   reply=`📂 DEAL ROOMS\n\n${(data||[]).map((x,i)=>`${i+1}. ${x.status}`).join("\n")||"No Deal Rooms yet."}`;
   }
+  if(tw)try{await tw.messages.create({from:process.env.TWILIO_WHATSAPP_NUMBER,to:`whatsapp:${p}`,body:reply});}catch(e){console.error("TWILIO",e.message);}
+  res.type("text/xml").send("<Response></Response>");
+ }catch(e){console.error(e);res.type("text/xml").send(twiml("JR PHEEF is temporarily unable to process that request."));}
 });
 
-/* =========================
-   WORK / TASKBRIDGE
-========================= */
-
-app.post("/api/work", auth, async (req, res) => {
-  try {
-    const {
-      title,
-      description,
-      location,
-      budget,
-      urgency
-    } = req.body;
-
-    if (!title || !description || !location)
-      return res.status(400).json({ error: "Complete task details required" });
-
-    const skill = skillMatch(`${title} ${description}`);
-
-    const task = {
-      id: id(),
-      owner_id: req.user.id,
-      title,
-      description,
-      location,
-      budget: Number(budget || 0),
-      urgency: urgency || "normal",
-      skill,
-      status: "MATCHING"
-    };
-
-    const { data, error } = await db
-      .from("tasks")
-      .insert(task)
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    const { data: workers } = await db
-      .from("workers")
-      .select("*")
-      .eq("status", "available")
-      .limit(100);
-
-    const match = (workers || []).find(w =>
-      String(w.skills || "").toLowerCase().includes(skill)
-    );
-
-    if (match) {
-      await db
-        .from("tasks")
-        .update({
-          worker_id: match.id,
-          status: "ROUTED"
-        })
-        .eq("id", task.id);
-
-      await notify(
-        match.user_id,
-        "JR PHEEF WORK opportunity",
-        `A ${skill} task may match your skills.`,
-        "work"
-      );
-    }
-
-    await audit("TASK_CREATED", req.user.id, {
-      task_id: task.id,
-      skill
-    });
-
-    res.json({
-      ok: true,
-      task: {
-        ...task,
-        worker_id: match ? match.id : null,
-        status: match ? "ROUTED" : "MATCHING"
-      }
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Task creation failed" });
-  }
+/* SPA */
+app.get(/.*/,(req,res)=>{
+ if(req.path.startsWith("/api/"))return res.status(404).json({error:"API route not found"});
+ res.sendFile(path.join(__dirname,"public","index.html"));
 });
 
-app.post("/api/workers", auth, async (req, res) => {
-  try {
-    const {
-      skills: workerSkills,
-      location,
-      experience
-    } = req.body;
-
-    if (!workerSkills)
-      return res.status(400).json({ error: "Skills required" });
-
-    const { data, error } = await db
-      .from("workers")
-      .upsert({
-        id: id(),
-        user_id: req.user.id,
-        skills: String(workerSkills).toLowerCase(),
-        location: location || "",
-        experience: experience || "",
-        status: "available"
-      })
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    await audit("WORKER_PROFILE_UPDATED", req.user.id);
-
-    res.json({ ok: true, worker: data });
-  } catch {
-    res.status(500).json({ error: "Worker profile failed" });
-  }
-});
-
-app.get("/api/work", auth, async (req, res) => {
-  const { data, error } = await db
-    .from("tasks")
-    .select("*")
-    .or(`owner_id.eq.${req.user.id}`);
-
-  if (error)
-    return res.status(500).json({ error: "Could not load work" });
-
-  res.json({ tasks: data || [] });
-});
-
-app.post("/api/work/:id/status", auth, async (req, res) => {
-  const allowed = [
-    "MATCHING",
-    "ROUTED",
-    "ACCEPTED",
-    "IN PROGRESS",
-    "SUBMITTED FOR VERIFICATION",
-    "VERIFIED",
-    "PAYMENT",
-    "COMPLETED",
-    "CANCELLED",
-    "DISPUTED",
-    "REASSIGNED"
-  ];
-
-  if (!allowed.includes(req.body.status))
-    return res.status(400).json({ error: "Invalid work status" });
-
-  const { data: task } = await db
-    .from("tasks")
-    .select("*")
-    .eq("id", req.params.id)
-    .maybeSingle();
-
-  if (!task)
-    return res.status(404).json({ error: "Task not found" });
-
-  const { data, error } = await db
-    .from("tasks")
-    .update({ status: req.body.status })
-    .eq("id", task.id)
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Status update failed" });
-
-  await audit("TASK_STATUS", req.user.id, {
-    task_id: task.id,
-    status: req.body.status
-  });
-
-  res.json({ ok: true, task: data });
-});
-
-/* =========================
-   DEAL ROOMS
-========================= */
-
-app.post("/api/dealrooms", auth, async (req, res) => {
-  try {
-    const {
-      seller_id,
-      listing_id,
-      task_id
-    } = req.body;
-
-    if (!seller_id)
-      return res.status(400).json({ error: "Other party required" });
-
-    if (seller_id === req.user.id)
-      return res.status(400).json({ error: "Cannot create a room with yourself" });
-
-    const { data: existing } = await db
-      .from("deal_rooms")
-      .select("*")
-      .eq("buyer_id", req.user.id)
-      .eq("seller_id", seller_id)
-      .eq("listing_id", listing_id || null)
-      .eq("task_id", task_id || null)
-      .maybeSingle();
-
-    if (existing)
-      return res.json({ ok: true, room: existing });
-
-    const room = {
-      id: id(),
-      buyer_id: req.user.id,
-      seller_id,
-      listing_id: listing_id || null,
-      task_id: task_id || null,
-      status: "OPEN",
-      connection_status: "WAITING"
-    };
-
-    const { data, error } = await db
-      .from("deal_rooms")
-      .insert(room)
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    await notify(
-      seller_id,
-      "New Deal Room",
-      `${req.user.name} opened a Deal Room with you.`,
-      "deal"
-    );
-
-    await audit("DEAL_ROOM_CREATED", req.user.id, {
-      room_id: data.id
-    });
-
-    res.json({ ok: true, room: data });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Deal Room failed" });
-  }
-});
-
-app.get("/api/dealrooms", auth, async (req, res) => {
-  const { data, error } = await db
-    .from("deal_rooms")
-    .select("*")
-    .or(`buyer_id.eq.${req.user.id},seller_id.eq.${req.user.id}`)
-    .order("created_at", { ascending: false });
-
-  if (error)
-    return res.status(500).json({ error: "Could not load Deal Rooms" });
-
-  res.json({ rooms: data || [] });
-});
-
-app.get("/api/dealrooms/:id/messages", auth, async (req, res) => {
-  const { data: room } = await db
-    .from("deal_rooms")
-    .select("*")
-    .eq("id", req.params.id)
-    .maybeSingle();
-
-  if (!room)
-    return res.status(404).json({ error: "Deal Room not found" });
-
-  if (![room.buyer_id, room.seller_id].includes(req.user.id))
-    return res.status(403).json({ error: "Access denied" });
-
-  const { data, error } = await db
-    .from("messages")
-    .select("*")
-    .eq("room_id", room.id)
-    .order("created_at", { ascending: true });
-
-  if (error)
-    return res.status(500).json({ error: "Could not load messages" });
-
-  res.json({ room, messages: data || [] });
-});
-
-app.post("/api/dealrooms/:id/messages", auth, async (req, res) => {
-  const text = String(req.body.message || "").trim();
-
-  if (!text)
-    return res.status(400).json({ error: "Message required" });
-
-  const { data: room } = await db
-    .from("deal_rooms")
-    .select("*")
-    .eq("id", req.params.id)
-    .maybeSingle();
-
-  if (!room)
-    return res.status(404).json({ error: "Deal Room not found" });
-
-  if (![room.buyer_id, room.seller_id].includes(req.user.id))
-    return res.status(403).json({ error: "Access denied" });
-
-  if (containsPhone(text) && room.connection_status !== "CONNECTED") {
-    return res.status(400).json({
-      error: "Contact details are protected until the JR PHEEF connection is completed."
-    });
-  }
-
-  const { data, error } = await db
-    .from("messages")
-    .insert({
-      id: id(),
-      room_id: room.id,
-      sender_id: req.user.id,
-      message: text
-    })
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Message failed" });
-
-  const other =
-    room.buyer_id === req.user.id
-      ? room.seller_id
-      : room.buyer_id;
-
-  await notify(other, "New message", `${req.user.name} sent you a message.`, "chat");
-
-  res.json({ ok: true, message: data });
-});
-
-/* =========================
-   CONNECTION + PAYMENT
-========================= */
-
-app.post("/api/connections", auth, async (req, res) => {
-  try {
-    const { room_id } = req.body;
-
-    const { data: room } = await db
-      .from("deal_rooms")
-      .select("*")
-      .eq("id", room_id)
-      .maybeSingle();
-
-    if (!room)
-      return res.status(404).json({ error: "Deal Room not found" });
-
-    if (![room.buyer_id, room.seller_id].includes(req.user.id))
-      return res.status(403).json({ error: "Access denied" });
-
-    const { data: existing } = await db
-      .from("connections")
-      .select("*")
-      .eq("room_id", room.id)
-      .maybeSingle();
-
-    if (existing)
-      return res.json({ connection: existing });
-
-    const { data: connection, error } = await db
-      .from("connections")
-      .insert({
-        id: id(),
-        room_id: room.id,
-        buyer_id: room.buyer_id,
-        seller_id: room.seller_id,
-        buyer_status: "PENDING",
-        seller_status: "PENDING",
-        status: "PENDING"
-      })
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    res.json({
-      ok: true,
-      connection,
-      message: "Connection created. Payment confirmation is required."
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Connection failed" });
-  }
-});
-
-app.post("/api/payments", auth, async (req, res) => {
-  try {
-    const {
-      room_id,
-      role,
-      purpose = "connection"
-    } = req.body;
-
-    const { data: room } = await db
-      .from("deal_rooms")
-      .select("*")
-      .eq("id", room_id)
-      .maybeSingle();
-
-    if (!room)
-      return res.status(404).json({ error: "Deal Room not found" });
-
-    if (![room.buyer_id, room.seller_id].includes(req.user.id))
-      return res.status(403).json({ error: "Access denied" });
-
-    const membership =
-      plans[req.user.membership] || plans.free;
-
-    const amount =
-      purpose === "connection"
-        ? membership.connection
-        : Number(req.body.amount || 0);
-
-    if (!amount)
-      return res.status(400).json({ error: "Payment amount unavailable" });
-
-    const { data, error } = await db
-      .from("payments")
-      .insert({
-        id: id(),
-        user_id: req.user.id,
-        room_id,
-        amount,
-        purpose,
-        role: role || (
-          room.buyer_id === req.user.id ? "buyer" : "seller"
-        ),
-        status: "PENDING"
-      })
-      .select("*")
-      .single();
-
-    if (error) throw error;
-
-    await audit("PAYMENT_CREATED", req.user.id, {
-      payment_id: data.id,
-      amount,
-      purpose
-    });
-
-    res.json({
-      ok: true,
-      payment: data,
-      message: "Payment request created. Awaiting real payment confirmation."
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Payment request failed" });
-  }
-});
-
-/*
-  REAL PAYMENT PROVIDER CALLBACK
-
-  M-Pesa will eventually call this endpoint.
-  Until the provider is connected, nothing is marked PAID automatically.
-*/
-
-app.post("/api/payments/callback", async (req, res) => {
-  try {
-    const secret = req.headers["x-payment-secret"];
-
-    if (!process.env.PAYMENT_CALLBACK_SECRET ||
-        secret !== process.env.PAYMENT_CALLBACK_SECRET) {
-      return res.status(401).json({ error: "Unauthorized callback" });
-    }
-
-    const {
-      payment_id,
-      status,
-      provider_reference
-    } = req.body;
-
-    if (!["PAID", "FAILED", "CANCELLED"].includes(status))
-      return res.status(400).json({ error: "Invalid payment status" });
-
-    const { data: payment } = await db
-      .from("payments")
-      .select("*")
-      .eq("id", payment_id)
-      .maybeSingle();
-
-    if (!payment)
-      return res.status(404).json({ error: "Payment not found" });
-
-    const { data: updated } = await db
-      .from("payments")
-      .update({
-        status,
-        provider_reference: provider_reference || null,
-        confirmed_at: status === "PAID"
-          ? new Date().toISOString()
-          : null
-      })
-      .eq("id", payment.id)
-      .select("*")
-      .single();
-
-    if (status === "PAID" && payment.purpose === "connection") {
-      const role = payment.role || "buyer";
-
-      const update =
-        role === "buyer"
-          ? { buyer_status: "PAID", buyer_payment_id: payment.id }
-          : { seller_status: "PAID", seller_payment_id: payment.id };
-
-      await db
-        .from("connections")
-        .update(update)
-        .eq("room_id", payment.room_id);
-
-      const { data: c } = await db
-        .from("connections")
-        .select("*")
-        .eq("room_id", payment.room_id)
-        .maybeSingle();
-
-      if (c && c.buyer_status === "PAID" && c.seller_status === "PAID") {
-        await db
-          .from("connections")
-          .update({ status: "CONNECTED" })
-          .eq("id", c.id);
-
-        await db
-          .from("deal_rooms")
-          .update({ connection_status: "CONNECTED" })
-          .eq("id", payment.room_id);
-
-        await notify(
-          c.buyer_id,
-          "Connection completed",
-          "Both parties have completed the JR PHEEF connection.",
-          "deal"
-        );
-
-        await notify(
-          c.seller_id,
-          "Connection completed",
-          "Both parties have completed the JR PHEEF connection.",
-          "deal"
-        );
-      }
-    }
-
-    await audit("PAYMENT_CALLBACK", null, {
-      payment_id,
-      status
-    });
-
-    res.json({ ok: true, payment: updated });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Callback processing failed" });
-  }
-});
-
-/* =========================
-   REFERRALS
-========================= */
-
-app.get("/api/referrals", auth, async (req, res) => {
-  const { data } = await db
-    .from("referrals")
-    .select("*")
-    .eq("referrer_id", req.user.id)
-    .order("created_at", { ascending: false });
-
-  res.json({
-    code: req.user.referral_code,
-    referrals: data || []
-  });
-});
-
-/* =========================
-   COUPONS
-========================= */
-
-app.post("/api/coupons/check", auth, async (req, res) => {
-  const code = String(req.body.code || "").trim().toUpperCase();
-
-  const { data } = await db
-    .from("coupons")
-    .select("*")
-    .eq("code", code)
-    .eq("active", true)
-    .maybeSingle();
-
-  if (!data)
-    return res.status(404).json({ error: "Coupon not found or inactive" });
-
-  if (data.expires_at && new Date(data.expires_at) < new Date())
-    return res.status(400).json({ error: "Coupon has expired" });
-
-  res.json({
-    ok: true,
-    coupon: data
-  });
-});
-
-/* =========================
-   WALLET
-========================= */
-
-app.get("/api/wallet", auth, async (req, res) => {
-  const { data: transactions } = await db
-    .from("wallet_transactions")
-    .select("*")
-    .eq("user_id", req.user.id)
-    .order("created_at", { ascending: false })
-    .limit(100);
-
-  const { data: withdrawals } = await db
-    .from("withdrawals")
-    .select("*")
-    .eq("user_id", req.user.id)
-    .order("created_at", { ascending: false });
-
-  res.json({
-    credits: Number(req.user.credits || 0),
-    rewards: Number(req.user.rewards || 0),
-    minimum_withdrawal: 200,
-    transactions: transactions || [],
-    withdrawals: withdrawals || []
-  });
-});
-
-app.post("/api/wallet/withdraw", auth, async (req, res) => {
-  const amount = Number(req.body.amount);
-
-  if (!Number.isFinite(amount) || amount < 200)
-    return res.status(400).json({
-      error: "Minimum individual withdrawal is KSh 200"
-    });
-
-  if (Number(req.user.rewards || 0) < amount)
-    return res.status(400).json({ error: "Insufficient withdrawable rewards" });
-
-  const { data, error } = await db
-    .from("withdrawals")
-    .insert({
-      id: id(),
-      user_id: req.user.id,
-      amount,
-      destination: cleanPhone(req.body.phone || req.user.phone),
-      status: "PENDING"
-    })
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Withdrawal request failed" });
-
-  await audit("WITHDRAWAL_REQUESTED", req.user.id, {
-    withdrawal_id: data.id,
-    amount
-  });
-
-  res.json({
-    ok: true,
-    withdrawal: data,
-    message: "Withdrawal request submitted. Awaiting payout processing."
-  });
-});
-
-/* =========================
-   NOTIFICATIONS
-========================= */
-
-app.get("/api/notifications", auth, async (req, res) => {
-  const { data } = await db
-    .from("notifications")
-    .select("*")
-    .eq("user_id", req.user.id)
-    .order("created_at", { ascending: false })
-    .limit(100);
-
-  res.json({ notifications: data || [] });
-});
-
-app.post("/api/notifications/read", auth, async (req, res) => {
-  await db
-    .from("notifications")
-    .update({ read: true })
-    .eq("user_id", req.user.id);
-
-  res.json({ ok: true });
-});
-
-/* =========================
-   DELIVERY
-========================= */
-
-app.post("/api/delivery", auth, async (req, res) => {
-  const {
-    room_id,
-    pickup,
-    destination,
-    description
-  } = req.body;
-
-  if (!pickup || !destination)
-    return res.status(400).json({ error: "Pickup and destination required" });
-
-  const { data, error } = await db
-    .from("deliveries")
-    .insert({
-      id: id(),
-      requester_id: req.user.id,
-      room_id: room_id || null,
-      pickup,
-      destination,
-      description: description || "",
-      status: "REQUESTED",
-      provider: "JR_PHEEF_NETWORK"
-    })
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Delivery request failed" });
-
-  await audit("DELIVERY_REQUESTED", req.user.id, {
-    delivery_id: data.id
-  });
-
-  res.json({
-    ok: true,
-    delivery: data,
-    message: "Delivery request is now in the JR PHEEF delivery queue."
-  });
-});
-
-app.post("/api/riders", auth, async (req, res) => {
-  const {
-    vehicle,
-    location,
-    provider
-  } = req.body;
-
-  if (!vehicle || !location)
-    return res.status(400).json({ error: "Vehicle and location required" });
-
-  const { data, error } = await db
-    .from("riders")
-    .upsert({
-      id: id(),
-      user_id: req.user.id,
-      vehicle,
-      location,
-      provider: provider || "JR_PHEEF",
-      status: "AVAILABLE"
-    })
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Rider registration failed" });
-
-  res.json({ ok: true, rider: data });
-});
-
-/* =========================
-   OWNER COMMAND CENTER
-========================= */
-
-app.post("/api/owner/login", (req, res) => {
-  if (!OWNER_KEY)
-    return res.status(503).json({ error: "OWNER_KEY is not configured" });
-
-  if (String(req.body.key || "") !== OWNER_KEY)
-    return res.status(401).json({ error: "Invalid owner credentials" });
-
-  res.json({
-    ok: true,
-    token: token({ id: "OWNER" }, "owner")
-  });
-});
-
-app.get("/api/owner/stats", ownerOnly, async (req, res) => {
-  try {
-    const tables = [
-      "members",
-      "listings",
-      "tasks",
-      "workers",
-      "deal_rooms",
-      "payments",
-      "withdrawals",
-      "deliveries",
-      "referrals"
-    ];
-
-    const stats = {};
-
-    for (const table of tables) {
-      const { count } = await db
-        .from(table)
-        .select("*", { count: "exact", head: true });
-
-      stats[table] = count || 0;
-    }
-
-    const { data: pendingPayments } = await db
-      .from("payments")
-      .select("amount")
-      .eq("status", "PENDING");
-
-    const { data: pendingWithdrawals } = await db
-      .from("withdrawals")
-      .select("amount")
-      .eq("status", "PENDING");
-
-    stats.pending_payment_value =
-      (pendingPayments || []).reduce((a, x) => a + Number(x.amount || 0), 0);
-
-    stats.pending_withdrawal_value =
-      (pendingWithdrawals || []).reduce((a, x) => a + Number(x.amount || 0), 0);
-
-    res.json({ stats });
-  } catch (e) {
-    res.status(500).json({ error: "Owner statistics failed" });
-  }
-});
-
-app.get("/api/owner/:table", ownerOnly, async (req, res) => {
-  const allowed = [
-    "members",
-    "listings",
-    "tasks",
-    "workers",
-    "deal_rooms",
-    "payments",
-    "withdrawals",
-    "deliveries",
-    "referrals",
-    "coupons",
-    "notifications",
-    "audit_logs"
-  ];
-
-  if (!allowed.includes(req.params.table))
-    return res.status(400).json({ error: "Invalid owner table" });
-
-  const { data, error } = await db
-    .from(req.params.table)
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(500);
-
-  if (error)
-    return res.status(500).json({ error: "Could not load owner data" });
-
-  res.json({ rows: data || [] });
-});
-
-app.post("/api/owner/coupon", ownerOnly, async (req, res) => {
-  const {
-    code,
-    description,
-    discount_type,
-    discount_value,
-    expires_at
-  } = req.body;
-
-  if (!code || !discount_value)
-    return res.status(400).json({ error: "Coupon details required" });
-
-  const { data, error } = await db
-    .from("coupons")
-    .insert({
-      id: id(),
-      code: String(code).toUpperCase(),
-      description: description || "",
-      discount_type: discount_type || "percent",
-      discount_value: Number(discount_value),
-      active: true,
-      expires_at: expires_at || null
-    })
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Coupon creation failed" });
-
-  await audit("OWNER_CREATED_COUPON", "OWNER", {
-    coupon_id: data.id
-  });
-
-  res.json({ ok: true, coupon: data });
-});
-
-app.post("/api/owner/withdrawal/:id", ownerOnly, async (req, res) => {
-  const status = req.body.status;
-
-  if (!["PROCESSING", "PAID", "REJECTED"].includes(status))
-    return res.status(400).json({ error: "Invalid withdrawal status" });
-
-  const { data: withdrawal } = await db
-    .from("withdrawals")
-    .select("*")
-    .eq("id", req.params.id)
-    .maybeSingle();
-
-  if (!withdrawal)
-    return res.status(404).json({ error: "Withdrawal not found" });
-
-  const { data, error } = await db
-    .from("withdrawals")
-    .update({
-      status,
-      processed_at: status === "PAID"
-        ? new Date().toISOString()
-        : null
-    })
-    .eq("id", withdrawal.id)
-    .select("*")
-    .single();
-
-  if (error)
-    return res.status(500).json({ error: "Withdrawal update failed" });
-
-  await notify(
-    withdrawal.user_id,
-    "Withdrawal update",
-    `Your withdrawal is now ${status}.`,
-    "wallet"
-  );
-
-  await audit("OWNER_WITHDRAWAL_STATUS", "OWNER", {
-    withdrawal_id: withdrawal.id,
-    status
-  });
-
-  res.json({ ok: true, withdrawal: data });
-});
-
-/* =========================
-   WHATSAPP
-========================= */
-
-app.post("/api/webhook/whatsapp", async (req, res) => {
-  try {
-    const incoming = String(req.body.Body || "").trim();
-    const from = cleanPhone(req.body.From || "");
-
-    const twiml = new twilio.twiml.MessagingResponse();
-
-    let reply;
-
-    const lower = incoming.toLowerCase();
-
-    if (lower.includes("buy")) {
-      reply =
-        "JR PHEEF 👋\nTell me what you are looking for, your budget and location. I will help you find a match.";
-    } else if (lower.includes("sell")) {
-      reply =
-        "JR PHEEF 👋\nSend the item/service name, price, location and at least 3 photos.";
-    } else if (lower.includes("work") || lower.includes("job")) {
-      reply =
-        "JR PHEEF WORK 👷\nTell me the job you need done, location and budget.";
-    } else {
-      reply =
-        "Welcome to JR PHEEF — Find. Match. Trade. 👋\n\nYou can tell me what you want to buy, sell or get done.";
-    }
-
-    twiml.message(reply);
-
-    await db.from("whatsapp_events").insert({
-      id: id(),
-      phone: from,
-      incoming,
-      reply
-    });
-
-    res.type("text/xml").send(twiml.toString());
-  } catch (e) {
-    console.error(e);
-    res.status(500).send("Webhook error");
-  }
-});
-
-/* =========================
-   SPA
-========================= */
-
-app.use((req, res) => {
-  if (req.method === "GET") {
-    return res.sendFile(
-      path.join(__dirname, "public", "index.html")
-    );
-  }
-
-  res.status(404).json({ error: "Route not found" });
-});
-
-app.listen(PORT, () => {
-  console.log(`JR PHEEF running on port ${PORT}`);
-}); 
+app.listen(PORT,()=>console.log(`🚀 JR PHEEF LIVE on ${PORT}`));
