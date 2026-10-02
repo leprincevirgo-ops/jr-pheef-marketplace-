@@ -1,17 +1,19 @@
 {
   "name": "jr-pheef-marketplace",
-  "version": "2.0.0",
-  "private": true,
+  "version": "3.3.0",
+  "description": "JR PHEEF - Find. Match. Connect. Create.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.0",
+    "@supabase/supabase-js": "^2.50.0",
     "bcryptjs": "^3.0.2",
     "express": "^5.1.0",
-    "express-rate-limit": "^8.1.0",
-    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
     "twilio": "^5.10.2"
   }
-} 
+}
