@@ -1,194 +1,1039 @@
-const express=require("express"),{createClient}=require("@supabase/supabase-js"),bcrypt=require("bcryptjs"),jwt=require("jsonwebtoken"),rateLimit=require("express-rate-limit");
-const app=express(),PORT=process.env.PORT||10000;
-const URL=process.env.SUPABASE_URL,KEY=process.env.SUPABASE_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY,ANON=process.env.SUPABASE_ANON_KEY;
-const JWT=process.env.JWT_SECRET||"change-this",OWNER=process.env.OWNER_KEY||"";
-const db=createClient(URL,KEY),authdb=createClient(URL,ANON||KEY);
-app.use(express.json({limit:"15mb"}));app.use(express.urlencoded({extended:true}));app.use(rateLimit({windowMs:60000,max:150}));
-app.use(express.static("public"));
+const express = require("express");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const multer = require("multer");
+const { createClient } = require("@supabase/supabase-js");
 
-const ok=(res,data)=>res.json({ok:true,...data}),fail=(res,e)=>res.status(400).json({error:e.message||String(e)});
-const token=u=>jwt.sign({id:u.id,role:u.role||"user"},JWT,{expiresIn:"30d"});
-const shield=x=>/(?:\+?\d[\d\s().-]{7,}|(?:whatsapp|telegram|signal|call|text|email|gmail|@)|07\d{8}|01\d{8})/i.test(String(x||""));
-async function user(id){let{data,error}=await db.from("members").select("*").eq("id",id).single();if(error)throw error;return data}
-async function auth(req,res,next){try{let h=req.headers.authorization||"";if(!h.startsWith("Bearer "))throw Error("Login required");let x=jwt.verify(h.slice(7),JWT);req.user=x.role==="owner"?{id:"OWNER",role:"owner",name:"ROBERT"}:await user(x.id);next()}catch(e){res.status(401).json({error:"Login required"})}}
-function owner(req,res,next){if(req.user?.role!=="owner")return res.status(403).json({error:"Owner only"});next()}
-async function rows(table,q={}){let x=db.from(table).select("*");for(let k in q)x=x.eq(k,q[k]);let{data,error}=await x.order("created_at",{ascending:false});if(error)throw error;return data||[]}
-async function upload(path,data,type){let b=Buffer.from(data.split(",")[1],"base64");let{error}=await db.storage.from("jr-pheef").upload(path,b,{contentType:type||"application/octet-stream",upsert:true});if(error)throw error;return db.storage.from("jr-pheef").getPublicUrl(path).data.publicUrl}
+const app = express();
 
-app.get("/api/health",(q,r)=>ok(r,{service:"JR PHEEF",status:"online"}));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "10mb" }));
 
-/* AUTH */
-app.post("/api/auth/signup",async(req,res)=>{try{
- let{name,email,password,phone,birth_year,referral_code,terms_agreed}=req.body;
- if(!name||!email||!password||!phone||!birth_year||!terms_agreed)throw Error("Complete all required fields.");
- if(!/^\S+@\S+\.\S+$/.test(email))throw Error("Enter a valid email.");
- let{data:exists}=await db.from("members").select("id").or(`email.eq.${email},phone.eq.${phone}`).maybeSingle();
- if(exists)throw Error("Email or phone already registered.");
- let{data:ref}=referral_code?await db.from("members").select("id").eq("referral_code",referral_code).maybeSingle():{data:null};
- let u={name,email:email.toLowerCase(),phone,birth_year,password_hash:await bcrypt.hash(password,10),role:"user",membership:"FREE+",credits:0,cash_balance:0,rewards:0,referral_code:"JP"+Math.random().toString(36).slice(2,9).toUpperCase(),referred_by:ref?.id||null,terms_agreed_at:new Date().toISOString()};
- let{data,error}=await db.from("members").insert(u).select("*").single();if(error)throw error;
- if(ref)await db.from("referrals").insert({referrer_id:ref.id,referred_id:u.id,reward:0,status:"PENDING"});
- ok(res,{token:token(data),user:data});
-}catch(e){fail(res,e)}});
+const PORT = process.env.PORT || 10000;
 
-app.post("/api/auth/login",async(req,res)=>{try{
- let{email,password}=req.body,{data:u,error}=await db.from("members").select("*").eq("email",String(email).toLowerCase()).single();
- if(error||!u||!(await bcrypt.compare(password,u.password_hash)))throw Error("Invalid email or password.");
- await db.from("members").update({last_active_at:new Date().toISOString()}).eq("id",u.id);
- ok(res,{token:token(u),user:u});
-}catch(e){fail(res,e)}});
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY =
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_ANON_KEY;
 
-app.get("/api/auth/google",async(req,res)=>{try{
- let{data,error}=await authdb.auth.signInWithOAuth({provider:"google",options:{redirectTo:(process.env.APP_URL||"https://jr-pheef-marketplace.onrender.com")+"/api/auth/google/callback"}});
- if(error)throw error;ok(res,{url:data.url});
-}catch(e){fail(res,e)}});
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY");
+  process.exit(1);
+}
 
-app.get("/api/auth/google/callback",async(req,res)=>{try{
- let{data,error}=await authdb.auth.exchangeCodeForSession(req.query.code);if(error)throw error;
- let g=data.user,email=g.email;if(!email)throw Error("Google account has no email.");
- let{data:u}=await db.from("members").select("*").eq("email",email.toLowerCase()).maybeSingle();
- if(!u){let{data:n,error:e}=await db.from("members").insert({name:g.user_metadata?.full_name||email.split("@")[0],email:email.toLowerCase(),role:"user",membership:"FREE+",google_verified:true,credits:0,cash_balance:0,rewards:0,referral_code:"JP"+Math.random().toString(36).slice(2,9).toUpperCase(),terms_agreed_at:new Date().toISOString()}).select("*").single();if(e)throw e;u=n}
- res.redirect("/?token="+token(u));
-}catch(e){res.redirect("/?error="+encodeURIComponent(e.message))}});
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-app.get("/api/me",auth,async(req,res)=>ok(res,{user:req.user}));
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 6 * 1024 * 1024,
+    files: 20
+  }
+});
 
-/* STORAGE */
-app.post("/api/upload",auth,async(req,res)=>{try{
- let{data,name,type,folder="uploads"}=req.body;if(!data)throw Error("File missing.");
- if(data.length>12000000)throw Error("File too large.");
- let url=await upload(`${folder}/${req.user.id}/${Date.now()}-${String(name||"file").replace(/\W+/g,"_")}`,data,type);
- ok(res,{url});
-}catch(e){fail(res,e)}});
+const ACCESS_PRICE = 30;
+const ACCESS_HOURS = 5;
+const FREE_START_HOUR = 2;
+const FREE_END_HOUR = 6;
 
-/* MARKET */
-app.get("/api/listings",auth,async(req,res)=>{try{
- let{data,error}=await db.from("listings").select("*").eq("status","ACTIVE").order("created_at",{ascending:false});
- if(error)throw error;let q=String(req.query.q||"").toLowerCase();
- if(q)data=(data||[]).filter(x=>`${x.title} ${x.description} ${x.category} ${x.location} ${x.country}`.toLowerCase().includes(q));
- ok(res,{data});
-}catch(e){fail(res,e)}});
+function clean(v) {
+  return String(v || "").trim();
+}
 
-app.post("/api/listings",auth,async(req,res)=>{try{
- let{x}=req.body; x=x||req.body;let{title,description,price,location,country,category,images=[]}=x;
- if(!title||Number(price)<=100)throw Error("Listing price must be above KSh 100.");
- if(!Array.isArray(images)||images.length<3||images.length>20)throw Error("Upload 3 to 20 photos.");
- if(shield(title)||shield(description))throw Error("Contact information is not allowed.");
- let{data,error}=await db.from("listings").insert({user_id:req.user.id,title,description,price,location,country,category,images,status:"ACTIVE"}).select("*").single();
- if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+function hash(value) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value))
+    .digest("hex");
+}
 
-/* DEAL ROOMS */
-app.post("/api/deals",auth,async(req,res)=>{try{
- let{seller_id,listing_id,task_id}=req.body;if(seller_id===req.user.id)throw Error("You cannot match yourself.");
- let{data:d,error}=await db.from("deal_rooms").insert({buyer_id:req.user.id,seller_id,listing_id,task_id,status:"OPEN"}).select("*").single();if(error)throw error;
- ok(res,{data:d});
-}catch(e){fail(res,e)}});
+function normalizePhone(phone) {
+  let p = clean(phone).replace(/^whatsapp:/i, "").replace(/\s+/g, "");
 
-app.get("/api/deals",auth,async(req,res)=>{try{
- let{data,error}=await db.from("deal_rooms").select("*").or(`buyer_id.eq.${req.user.id},seller_id.eq.${req.user.id}`).order("created_at",{ascending:false});if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+  if (p.startsWith("+254")) return p;
+  if (p.startsWith("254")) return "+" + p;
+  if (p.startsWith("07")) return "+254" + p.substring(1);
+  if (p.startsWith("01")) return "+254" + p.substring(1);
 
-app.get("/api/deals/:id/messages",auth,async(req,res)=>{try{
- let{data:r}=await db.from("deal_rooms").select("*").eq("id",req.params.id).single();if(!r||![r.buyer_id,r.seller_id].includes(req.user.id))throw Error("Access denied.");
- ok(res,{data:await rows("messages",{room_id:req.params.id})});
-}catch(e){fail(res,e)}});
+  return p;
+}
 
-app.post("/api/deals/:id/messages",auth,async(req,res)=>{try{
- let{message}=req.body;if(!message||shield(message))throw Error("Contact information cannot be shared here.");
- let{data:r}=await db.from("deal_rooms").select("*").eq("id",req.params.id).single();if(!r||![r.buyer_id,r.seller_id].includes(req.user.id))throw Error("Access denied.");
- let{data:m,error}=await db.from("messages").insert({room_id:r.id,sender_id:req.user.id,message}).select("*").single();if(error)throw error;ok(res,{data:m});
-}catch(e){fail(res,e)}});
+function validPhone(phone) {
+  return /^\+254\d{9}$/.test(phone);
+}
 
-/* WORK */
-app.post("/api/tasks",auth,async(req,res)=>{try{
- let{title,description,budget,location,skill,urgency="NORMAL"}=req.body;
- if(shield(title)||shield(description))throw Error("Contact information is not allowed.");
- let{data,error}=await db.from("tasks").insert({owner_id:req.user.id,title,description,budget,location,skill,urgency,status:"MATCHING"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+function money(v) {
+  return Number(v || 0).toLocaleString("en-KE");
+}
 
-app.get("/api/tasks",auth,async(req,res)=>{try{ok(res,{data:await rows("tasks")})}catch(e){fail(res,e)}});
+function now() {
+  return new Date();
+}
 
-app.post("/api/talent",auth,async(req,res)=>{try{
- let{skills,location,experience,availability="AVAILABLE"}=req.body;
- let{data,error}=await db.from("workers").upsert({user_id:req.user.id,skills,location,experience,availability},{onConflict:"user_id"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+function freeWindow() {
+  const d = new Date(
+    now().toLocaleString("en-US", {
+      timeZone: "Africa/Nairobi"
+    })
+  );
 
-app.get("/api/talent",auth,async(req,res)=>{try{ok(res,{data:await rows("workers")})}catch(e){fail(res,e)}});
+  const h = d.getHours();
 
-/* WALLET */
-app.get("/api/wallet",auth,async(req,res)=>{try{
- let u=await user(req.user.id),{data:tx}=await db.from("wallet_transactions").select("*").eq("user_id",u.id).order("created_at",{ascending:false}).limit(30);
- ok(res,{cash:Number(u.cash_balance||0),credits:Number(u.credits||0),transactions:tx||[]});
-}catch(e){fail(res,e)}});
+  return h >= FREE_START_HOUR && h < FREE_END_HOUR;
+}
 
-app.post("/api/withdraw",auth,async(req,res)=>{try{
- let{amount,phone}=req.body;amount=Number(amount);if(amount<200)throw Error("Minimum withdrawal is KSh 200.");
- let u=await user(req.user.id),{data:p}=await db.from("withdrawals").select("amount").eq("user_id",u.id).eq("status","PENDING");let pending=(p||[]).reduce((a,x)=>a+Number(x.amount),0);
- if(Number(u.cash_balance)-pending<amount)throw Error("Insufficient withdrawable balance.");
- let{data,error}=await db.from("withdrawals").insert({user_id:u.id,amount,phone,status:"PENDING"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+function contactBlocked(text) {
+  const s = clean(text);
 
-/* DELIVERY */
-app.post("/api/delivery",auth,async(req,res)=>{try{
- let{pickup,dropoff,provider="JR PHEEF NETWORK",price=0}=req.body;if(shield(pickup)||shield(dropoff))throw Error("Contact information is not allowed.");
- let{data,error}=await db.from("delivery_requests").insert({user_id:req.user.id,pickup,dropoff,provider,price,status:"AVAILABLE"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+  const patterns = [
+    /\b\d{9,13}\b/,
+    /\+254\d{9}/i,
+    /\b07\d{8}\b/i,
+    /\b01\d{8}\b/i,
+    /https?:\/\//i,
+    /www\./i,
+    /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i,
+    /\.com\b/i,
+    /\.co\.ke\b/i,
+    /\bwhatsapp\b/i,
+    /\btelegram\b/i,
+    /\bcall me\b/i,
+    /\btext me\b/i
+  ];
 
-app.get("/api/delivery",auth,async(req,res)=>{try{ok(res,{data:await rows("delivery_requests",{user_id:req.user.id})})}catch(e){fail(res,e)}});
+  return patterns.some((r) => r.test(s));
+}
 
-/* SHORTS */
-app.post("/api/shorts",auth,async(req,res)=>{try{
- let{video_url,caption,category}=req.body;if(!video_url)throw Error("Video required.");
- if(shield(caption)||shield(video_url))throw Error("Contact information is not allowed.");
- let{data,error}=await db.from("shorts").insert({user_id:req.user.id,video_url,caption,category,status:"REVIEW"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+function sessionCookie(token) {
+  return `jr_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`;
+}
 
-app.get("/api/shorts",auth,async(req,res)=>{try{
- let{data,error}=await db.from("shorts").select("*").eq("status","APPROVED").order("created_at",{ascending:false}).limit(50);if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+async function getMember(req) {
+  const raw = req.headers.cookie || "";
+  const match = raw.match(/jr_session=([^;]+)/);
 
-/* ADS */
-app.get("/api/ads",auth,async(req,res)=>{try{ok(res,{data:await rows("ads",{status:"APPROVED"})})}catch(e){fail(res,e)}});
+  if (!match) return null;
 
-app.post("/api/ads",auth,async(req,res)=>{try{
- let b=req.body;if(shield(`${b.company} ${b.headline} ${b.description} ${b.offer}`))throw Error("Contact information is not allowed.");
- let{data,error}=await db.from("ads").insert({...b,user_id:req.user.id,status:"PENDING"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+  const token = match[1];
 
-/* DGBO */
-app.post("/api/dgbo/opportunities",auth,async(req,res)=>{try{
- let b=req.body;if(shield(`${b.title} ${b.description}`))throw Error("Contact information is not allowed.");
- let{data,error}=await db.from("dgbo_opportunities").insert({...b,user_id:req.user.id,status:"REVIEW"}).select("*").single();if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+  const { data } = await db
+    .from("sessions")
+    .select("member_id,expires_at")
+    .eq("token_hash", hash(token))
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
 
-/* INVEST */
-app.get("/api/invest",auth,async(req,res)=>{try{
- let{data:products}=await db.from("investment_products").select("*").order("created_at");
- let{data:holdings}=await db.from("investment_holdings").select("*").eq("user_id",req.user.id);
- let u=await user(req.user.id);ok(res,{growth_credits:Number(u.credits||0),products:products||[],holdings:holdings||[]});
-}catch(e){fail(res,e)}});
+  if (!data) return null;
 
-app.post("/api/invest/buy",auth,async(req,res)=>{try{
- let{product_id,amount}=req.body;amount=Number(amount);if(amount<=0)throw Error("Invalid amount.");
- let{data,error}=await db.rpc("buy_growth_units",{p_user:req.user.id,p_product:product_id,p_amount:amount});if(error)throw error;ok(res,{data});
-}catch(e){fail(res,e)}});
+  const { data: member } = await db
+    .from("members")
+    .select("*")
+    .eq("id", data.member_id)
+    .maybeSingle();
 
-/* REFERRALS / COUPONS */
-app.get("/api/rewards",auth,async(req,res)=>{try{ok(res,{referrals:await rows("referrals",{referrer_id:req.user.id}),coupons:await rows("coupons",{active:true})})}catch(e){fail(res,e)}});
+  return member || null;
+}
 
-/* OWNER */
-app.post("/api/owner/login",async(req,res)=>{if(!OWNER||req.body.key!==OWNER)return res.status(401).json({error:"Invalid owner key"});ok(res,{token:jwt.sign({id:"OWNER",role:"owner"},JWT,{expiresIn:"12h"})})});
-app.get("/api/owner/stats",auth,owner,async(req,res)=>{try{
- let tables=["members","listings","deal_rooms","payments","tasks","delivery_requests","shorts","ads","dgbo_opportunities"];
- let out={};for(let t of tables){let{count}=await db.from(t).select("*",{count:"exact",head:true});out[t]=count||0}ok(res,{stats:out});
-}catch(e){fail(res,e)}});
+async function requireMember(req, res) {
+  const member = await getMember(req);
 
-app.get("/api/owner/:table",auth,owner,async(req,res)=>{try{
- const allowed=["members","listings","deal_rooms","payments","tasks","delivery_requests","shorts","ads","dgbo_opportunities","investment_products","investment_holdings","reports","audit_logs"];
- if(!allowed.includes(req.params.table))throw Error("Table unavailable.");
- ok(res,{data:await rows(req.params.table)});
-}catch(e){fail(res,e)}});
+  if (!member) {
+    res.status(401).json({
+      ok: false,
+      error: "LOGIN_REQUIRED"
+    });
+    return null;
+  }
 
-app.use((req,res)=>{if(req.method==="GET")res.sendFile(require("path").join(process.cwd(),"public","index.html"));else res.status(404).json({error:"Not found"})});
-app.listen(PORT,()=>console.log("JR PHEEF running on "+PORT)); 
+  return member;
+}
+
+async function logActivity(memberId, action, details = {}) {
+  await db.from("activity_log").insert({
+    member_id: String(memberId),
+    action,
+    details
+  });
+}
+
+/* =========================================================
+   HEALTH
+========================================================= */
+
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    app: "JR PHEEF",
+    version: "3.3.0",
+    access: "KSh 30 / 5 hours",
+    free_window: "02:00-06:00 EAT",
+    points: true,
+    pheef_flex: "prepared_not_active",
+    daraja: "not_connected"
+  });
+});
+
+/* =========================================================
+   HOME
+========================================================= */
+
+app.get("/", (req, res) => {
+  res.sendFile(require("path").join(__dirname, "public", "index.html"));
+});
+
+/* =========================================================
+   REGISTER
+========================================================= */
+
+app.post("/api/register", async (req, res) => {
+  try {
+    const name = clean(req.body.full_name);
+    const phone = normalizePhone(req.body.phone);
+    const email = clean(req.body.email).toLowerCase();
+    const birthYear = Number(req.body.birth_year);
+    const password = clean(req.body.password);
+
+    if (!name || !validPhone(phone) || !password) {
+      return res.status(400).json({
+        ok: false,
+        error: "Name, valid Kenyan phone and password are required."
+      });
+    }
+
+    const { data: existing } = await db
+      .from("members")
+      .select("id")
+      .or(`phone.eq.${phone},email.eq.${email}`)
+      .limit(1);
+
+    if (existing && existing.length) {
+      return res.status(409).json({
+        ok: false,
+        error: "An account already exists."
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const { data: dgbo } = await db.rpc("next_dgbo_id");
+
+    const dgboId =
+      dgbo ||
+      `DGBO-${String(Date.now()).slice(-6)}`;
+
+    const { data: member, error } = await db
+      .from("members")
+      .insert({
+        dgbo_id: dgboId,
+        full_name: name,
+        phone,
+        email: email || null,
+        birth_year: birthYear || null,
+        password_hash: passwordHash,
+        verified: false,
+        status: "active",
+        plan: "FREE",
+        reward_points: 0,
+        credits: 0,
+        rewards: 0,
+        referrals: 0,
+        theme: "ocean",
+        account_type: "individual"
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("REGISTER:", error);
+      return res.status(400).json({
+        ok: false,
+        error: error.message
+      });
+    }
+
+    await logActivity(member.id, "REGISTER", {
+      dgbo_id: dgboId
+    });
+
+    res.json({
+      ok: true,
+      message: "Account created.",
+      member: {
+        id: member.id,
+        dgbo_id: member.dgbo_id,
+        full_name: member.full_name
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({
+      ok: false,
+      error: "Registration failed."
+    });
+  }
+});
+
+/* =========================================================
+   LOGIN
+========================================================= */
+
+app.post("/api/login", async (req, res) => {
+  try {
+    const identifier = clean(req.body.identifier);
+    const password = clean(req.body.password);
+
+    const phone = normalizePhone(identifier);
+
+    const query = validPhone(phone)
+      ? `phone.eq.${phone}`
+      : `email.eq.${identifier.toLowerCase()}`;
+
+    const { data: member } = await db
+      .from("members")
+      .select("*")
+      .or(query)
+      .maybeSingle();
+
+    if (!member || !member.password_hash) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid login details."
+      });
+    }
+
+    const valid = await bcrypt.compare(
+      password,
+      member.password_hash
+    );
+
+    if (!valid) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid login details."
+      });
+    }
+
+    const token = crypto.randomBytes(48).toString("hex");
+
+    await db.from("sessions").insert({
+      member_id: String(member.id),
+      token_hash: hash(token),
+      expires_at: new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000
+      ).toISOString()
+    });
+
+    res.setHeader("Set-Cookie", sessionCookie(token));
+
+    await db
+      .from("members")
+      .update({
+        last_seen_at: new Date().toISOString(),
+        is_online: true
+      })
+      .eq("id", member.id);
+
+    res.json({
+      ok: true,
+      member
+    });
+  } catch (e) {
+    console.error("LOGIN:", e);
+
+    res.status(500).json({
+      ok: false,
+      error: "Login failed."
+    });
+  }
+});
+
+/* =========================================================
+   ME
+========================================================= */
+
+app.get("/api/me", async (req, res) => {
+  const member = await getMember(req);
+
+  if (!member) {
+    return res.json({
+      ok: true,
+      logged_in: false
+    });
+  }
+
+  res.json({
+    ok: true,
+    logged_in: true,
+    member
+  });
+});
+
+/* =========================================================
+   LOGOUT
+========================================================= */
+
+app.post("/api/logout", async (req, res) => {
+  const raw = req.headers.cookie || "";
+  const match = raw.match(/jr_session=([^;]+)/);
+
+  if (match) {
+    await db
+      .from("sessions")
+      .delete()
+      .eq("token_hash", hash(match[1]));
+  }
+
+  res.setHeader(
+    "Set-Cookie",
+    "jr_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0"
+  );
+
+  res.json({ ok: true });
+});
+
+/* =========================================================
+   ACCESS STATUS
+========================================================= */
+
+async function accessStatus(memberId) {
+  if (freeWindow()) {
+    return {
+      allowed: true,
+      reason: "FREE_WINDOW",
+      message: "Free access between 02:00 and 06:00 EAT."
+    };
+  }
+
+  const { data } = await db
+    .from("access_passes")
+    .select("*")
+    .eq("member_id", String(memberId))
+    .eq("status", "active")
+    .gt("expires_at", new Date().toISOString())
+    .order("expires_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (data) {
+    return {
+      allowed: true,
+      reason: "ACTIVE_PASS",
+      expires_at: data.expires_at
+    };
+  }
+
+  return {
+    allowed: false,
+    reason: "PAYMENT_REQUIRED",
+    price: ACCESS_PRICE,
+    hours: ACCESS_HOURS
+  };
+}
+
+app.get("/api/access", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  res.json({
+    ok: true,
+    ...(await accessStatus(member.id)),
+    points: Number(member.reward_points || 0),
+    points_needed: ACCESS_PRICE
+  });
+});
+
+/* =========================================================
+   REDEEM POINTS
+========================================================= */
+
+app.post("/api/points/redeem-access", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const points = Number(member.reward_points || 0);
+
+  if (freeWindow()) {
+    return res.json({
+      ok: true,
+      message: "You already have free access right now.",
+      free: true
+    });
+  }
+
+  if (points < ACCESS_PRICE) {
+    return res.status(400).json({
+      ok: false,
+      error: `You need ${ACCESS_PRICE} points for 5-hour access.`,
+      points,
+      needed: ACCESS_PRICE
+    });
+  }
+
+  const starts = new Date();
+  const expires = new Date(
+    starts.getTime() + ACCESS_HOURS * 60 * 60 * 1000
+  );
+
+  const { data: updated, error } = await db
+    .from("members")
+    .update({
+      reward_points: points - ACCESS_PRICE
+    })
+    .eq("id", member.id)
+    .gte("reward_points", ACCESS_PRICE)
+    .select("reward_points")
+    .maybeSingle();
+
+  if (error || !updated) {
+    return res.status(409).json({
+      ok: false,
+      error: "Points could not be redeemed. Please try again."
+    });
+  }
+
+  const { error: passError } = await db
+    .from("access_passes")
+    .insert({
+      member_id: String(member.id),
+      amount: ACCESS_PRICE,
+      hours: ACCESS_HOURS,
+      payment_method: "points",
+      source: "points",
+      status: "active",
+      starts_at: starts.toISOString(),
+      expires_at: expires.toISOString()
+    });
+
+  if (passError) {
+    await db
+      .from("members")
+      .update({
+        reward_points: points
+      })
+      .eq("id", member.id);
+
+    return res.status(500).json({
+      ok: false,
+      error: "Access pass could not be created."
+    });
+  }
+
+  await db.from("point_transactions").insert({
+    member_id: String(member.id),
+    amount: -ACCESS_PRICE,
+    transaction_type: "REDEEM_ACCESS",
+    description: "Redeemed 30 points for 5-hour marketplace access"
+  });
+
+  await logActivity(member.id, "POINTS_REDEEMED", {
+    points: ACCESS_PRICE,
+    access_hours: ACCESS_HOURS
+  });
+
+  res.json({
+    ok: true,
+    message: "30 points redeemed. You now have 5-hour access.",
+    points_remaining: Number(updated.reward_points || 0),
+    expires_at: expires.toISOString()
+  });
+});
+
+/* =========================================================
+   OWNER POINT CONTROL
+========================================================= */
+
+app.post("/api/owner/points", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const owner =
+    String(member.account_type || "").toLowerCase() === "owner" ||
+    String(member.role || "").toLowerCase() === "owner";
+
+  if (!owner) {
+    return res.status(403).json({
+      ok: false,
+      error: "Owner access required."
+    });
+  }
+
+  const targetId = clean(req.body.member_id);
+  const amount = Number(req.body.amount);
+  const description =
+    clean(req.body.description) || "Owner point adjustment";
+
+  if (!targetId || !Number.isInteger(amount) || amount === 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "member_id and non-zero integer amount required."
+    });
+  }
+
+  const { data: target } = await db
+    .from("members")
+    .select("id,reward_points")
+    .eq("id", targetId)
+    .single();
+
+  if (!target) {
+    return res.status(404).json({
+      ok: false,
+      error: "Member not found."
+    });
+  }
+
+  const newPoints =
+    Math.max(0, Number(target.reward_points || 0) + amount);
+
+  await db
+    .from("members")
+    .update({
+      reward_points: newPoints
+    })
+    .eq("id", target.id);
+
+  await db.from("point_transactions").insert({
+    member_id: String(target.id),
+    amount,
+    transaction_type: amount > 0 ? "OWNER_AWARD" : "OWNER_DEDUCTION",
+    description
+  });
+
+  res.json({
+    ok: true,
+    reward_points: newPoints
+  });
+});
+
+/* =========================================================
+   PHEEF FLEX / OKOA
+   PREPARED BUT DISABLED
+========================================================= */
+
+app.get("/api/flex", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const { data: account } = await db
+    .from("pay_later_accounts")
+    .select("*")
+    .eq("member_id", String(member.id))
+    .maybeSingle();
+
+  res.json({
+    ok: true,
+    active: false,
+    status: account?.status || "inactive",
+    trust_level: account?.trust_level || 0,
+    available_limit: account?.available_limit || 0,
+    message:
+      "PHEEF FLEX is being prepared. Real credit is not active yet."
+  });
+});
+
+app.post("/api/flex/request", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const amount = Number(req.body.amount);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({
+      ok: false,
+      error: "Enter a valid amount."
+    });
+  }
+
+  /*
+    IMPORTANT:
+    This does NOT issue credit.
+    It only records interest/request information.
+  */
+
+  const { data, error } = await db
+    .from("credit_requests")
+    .insert({
+      member_id: String(member.id),
+      requested_amount: amount,
+      approved_amount: 0,
+      principal: 0,
+      interest_amount: 0,
+      fees: 0,
+      total_payable: 0,
+      status: "disabled",
+      provider: "JR_PHEEF_PENDING_PARTNER",
+      purpose: "marketplace_access"
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+
+  await logActivity(member.id, "FLEX_REQUEST", {
+    amount,
+    status: "disabled"
+  });
+
+  res.json({
+    ok: true,
+    active: false,
+    request_id: data.id,
+    message:
+      "Your PHEEF FLEX request was recorded, but credit is not currently enabled."
+  });
+});
+
+/* =========================================================
+   PROFILE
+========================================================= */
+
+app.put("/api/profile", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const allowed = [
+    "full_name",
+    "email",
+    "bio",
+    "location",
+    "theme",
+    "profile_visibility",
+    "show_email",
+    "show_birth_year",
+    "show_location"
+  ];
+
+  const update = {};
+
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      update[key] = req.body[key];
+    }
+  }
+
+  const { data, error } = await db
+    .from("members")
+    .update(update)
+    .eq("id", member.id)
+    .select()
+    .single();
+
+  if (error) {
+    return res.status(400).json({
+      ok: false,
+      error: error.message
+    });
+  }
+
+  res.json({
+    ok: true,
+    member: data
+  });
+});
+
+/* =========================================================
+   LISTINGS
+========================================================= */
+
+app.get("/api/listings", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const access = await accessStatus(member.id);
+
+  if (!access.allowed) {
+    return res.status(402).json({
+      ok: false,
+      error: "MARKETPLACE_ACCESS_REQUIRED",
+      price: ACCESS_PRICE,
+      hours: ACCESS_HOURS,
+      points: Number(member.reward_points || 0)
+    });
+  }
+
+  let query = db
+    .from("jr_listings")
+    .select("*")
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  const q = clean(req.query.q);
+
+  if (q) {
+    query = query.ilike("item_name", `%${q}%`);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    return res.status(400).json({
+      ok: false,
+      error: error.message
+    });
+  }
+
+  res.json({
+    ok: true,
+    listings: data || []
+  });
+});
+
+app.post(
+  "/api/listings",
+  upload.array("photos", 20),
+  async (req, res) => {
+    const member = await requireMember(req, res);
+    if (!member) return;
+
+    const access = await accessStatus(member.id);
+
+    if (!access.allowed) {
+      return res.status(402).json({
+        ok: false,
+        error: "MARKETPLACE_ACCESS_REQUIRED",
+        price: ACCESS_PRICE,
+        hours: ACCESS_HOURS,
+        points: Number(member.reward_points || 0)
+      });
+    }
+
+    const name = clean(req.body.item_name);
+    const description = clean(req.body.description);
+
+    if (!name) {
+      return res.status(400).json({
+        ok: false,
+        error: "Listing title is required."
+      });
+    }
+
+    if (contactBlocked(description) || contactBlocked(name)) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Direct contact information cannot be shared in listings."
+      });
+    }
+
+    const photos = [];
+
+    for (const file of req.files || []) {
+      const filename =
+        `${member.id}/${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${file.originalname}`
+          .replace(/\s+/g, "-");
+
+      const { error } = await db.storage
+        .from("jr-pheef-media")
+        .upload(filename, file.buffer, {
+          contentType: file.mimetype,
+          upsert: false
+        });
+
+      if (!error) {
+        const { data } = db.storage
+          .from("jr-pheef-media")
+          .getPublicUrl(filename);
+
+        photos.push(data.publicUrl);
+      }
+    }
+
+    const { data, error } = await db
+      .from("jr_listings")
+      .insert({
+        member_id: String(member.id),
+        item_name: name,
+        description,
+        category: clean(req.body.category),
+        price: Number(req.body.price || 0),
+        location: clean(req.body.location),
+        photos,
+        status: "active"
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(400).json({
+        ok: false,
+        error: error.message
+      });
+    }
+
+    await logActivity(member.id, "CREATE_LISTING", {
+      listing_id: data.id
+    });
+
+    res.json({
+      ok: true,
+      listing: data
+    });
+  }
+);
+
+/* =========================================================
+   CONNECTIONS
+========================================================= */
+
+app.post("/api/connections", async (req, res) => {
+  const member = await requireMember(req, res);
+  if (!member) return;
+
+  const receiverId = clean(req.body.receiver_id);
+
+  if (!receiverId || receiverId === String(member.id)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid connection."
+    });
+  }
+
+  const { data, error } = await db
+    .from("connections")
+    .upsert(
+      {
+        requester_id: String(member.id),
+        receiver_id: receiverId,
+        status: "pending",
+        updated_at: new Date().toISOString()
+      },
+      {
+        onConflict: "requester_id,receiver_id"
+      }
+    )
+    .select()
+    .single();
+
+  if (error) {
+    return res.status(400).json({
+      ok: false,
+      error: error.message
+    });
+  }
+
+  res.json({
+    ok: true,
+    connection: data
+  });
+});
+
+/* =========================================================
+   WHATSAPP
+========================================================= */
+
+app.post("/api/webhook/whatsapp", async (req, res) => {
+  const message = clean(req.body.Body);
+  const phone = normalizePhone(req.body.From);
+
+  let response =
+    "👋 Welcome to JR PHEEF.\n\n" +
+    "Find opportunities.\n" +
+    "Create opportunities.\n" +
+    "Match.\n" +
+    "Connect.\n\n" +
+    "You can also chat naturally with JR PHEEF.";
+
+  try {
+    const upper = message.toUpperCase();
+
+    if (upper === "POINTS") {
+      const { data } = await db
+        .from("members")
+        .select("reward_points")
+        .eq("phone", phone)
+        .maybeSingle();
+
+      const points = Number(data?.reward_points || 0);
+
+      response =
+        `⭐ YOUR JR PHEEF POINTS\n\n` +
+        `${points} points\n\n` +
+        `30 points = 5-hour marketplace access.\n\n` +
+        `Redeem when you don't want to pay cash.`;
+    }
+
+    else if (
+      upper === "OKOA" ||
+      upper === "PAY LATER" ||
+      upper === "FLEX"
+    ) {
+      response =
+        "💙 PHEEF FLEX\n\n" +
+        "Need marketplace access but don't have cash?\n\n" +
+        "PHEEF FLEX is being prepared for eligible members.\n\n" +
+        "Real credit is not active yet.\n\n" +
+        "For now you can use JR PHEEF Points or the normal KSh 30 access pass.";
+    }
+
+    else if (upper === "ACCESS") {
+      response =
+        "🔓 JR PHEEF ACCESS\n\n" +
+        "KSh 30 = 5 hours.\n\n" +
+        "02:00–06:00 EAT = FREE.\n\n" +
+        "You can also redeem 30 JR PHEEF Points instead of paying cash.";
+    }
+
+    else if (upper === "HELP") {
+      response =
+        "JR PHEEF\n\n" +
+        "🔎 FIND opportunities\n" +
+        "➕ CREATE opportunities\n" +
+        "🤝 CONNECT with people\n" +
+        "⭐ POINTS\n" +
+        "🔓 ACCESS\n" +
+        "💙 FLEX / OKOA\n\n" +
+        "You can also speak normally and JR PHEEF will understand common requests.";
+    }
+
+    return res
+      .type("text/xml")
+      .send(
+        `<Response><Message>${response
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")}</Message></Response>`
+      );
+  } catch (e) {
+    console.error("WHATSAPP:", e);
+
+    return res
+      .type("text/xml")
+      .send(
+        "<Response><Message>JR PHEEF is temporarily unable to process that request.</Message></Response>"
+      );
+  }
+});
+
+/* =========================================================
+   EXPRESS 5 FALLBACK
+========================================================= */
+
+app.use((req, res) => {
+  if (req.method === "GET") {
+    return res.sendFile(
+      require("path").join(__dirname, "public", "index.html")
+    );
+  }
+
+  res.status(404).json({
+    ok: false,
+    error: "Not found"
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`JR PHEEF 3.3 running on ${PORT}`);
+  console.log("Access: KSh 30 / 5 hours");
+  console.log("Free window: 02:00-06:00 EAT");
+  console.log("Points redemption: ACTIVE");
+  console.log("PHEEF FLEX: PREPARED / INACTIVE");
+  console.log("Daraja: NOT CONNECTED");
+}); 
