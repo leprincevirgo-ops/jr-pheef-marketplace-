@@ -1,241 +1,647 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#087CFF">
 <title>JR PHEEF</title>
+
 <style>
-:root{--blue:#087CFF;--aqua:#00C2FF;--navy:#061A33;--bg:#F4F8FC;--card:#fff;--text:#142033;--muted:#718096;--line:#E2E8F0}
-*{box-sizing:border-box}body{margin:0;font-family:Arial;background:var(--bg);color:var(--text);padding-bottom:65px}
-header{background:linear-gradient(110deg,var(--navy),var(--blue),var(--aqua));color:white;padding:15px 18px;position:sticky;top:0;z-index:10}
-.brand{font-size:23px;font-weight:900}.tag{font-size:11px;opacity:.85}
-main{max-width:950px;margin:auto;padding:15px}.card{background:var(--card);padding:18px;border-radius:18px;margin-bottom:14px;box-shadow:0 4px 20px #00000009;border:1px solid var(--line)}
-.logo{font-size:40px;font-weight:900;color:var(--blue);letter-spacing:-2px}.hero{text-align:center;padding:30px 15px}
-input,textarea,select{width:100%;padding:13px;border:1px solid var(--line);border-radius:11px;margin:5px 0;background:white}textarea{min-height:90px}
-button{border:0;border-radius:11px;padding:12px 17px;font-weight:bold;cursor:pointer}.btn{background:var(--blue);color:white}.aqua{background:var(--aqua);color:white}.dark{background:var(--navy);color:white}.light{background:#EAF6FF;color:var(--blue)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:10px}.tile{background:#F5FAFF;border:1px solid #DCEBFA;padding:17px 8px;color:var(--text)}.tile b{display:block;font-size:25px;margin-bottom:6px}
-.muted{color:var(--muted)}.pill{display:inline-block;background:#EAF6FF;color:var(--blue);padding:5px 9px;border-radius:20px;font-size:11px;font-weight:bold}.row{display:flex;gap:7px;flex-wrap:wrap}
-nav{position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid var(--line);display:flex;overflow:auto;z-index:20}nav button{background:white;color:#536173;min-width:75px;font-size:10px;padding:8px 4px}nav b{display:block;font-size:19px}
-.hide{display:none!important}.price{font-size:20px;font-weight:bold}.msg{background:#F0F6FC;padding:10px;border-radius:12px;margin:6px;max-width:80%}.mine{margin-left:auto;background:#DDF3FF}
-video{width:100%;border-radius:14px;background:#000}.offline{text-align:center;background:#FFF0C2;padding:8px;font-size:12px;color:#765900}
-.banner{background:linear-gradient(110deg,var(--navy),var(--blue),var(--aqua));color:white;padding:22px;border-radius:18px}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Arial,sans-serif;
+  color:#fff;
+  min-height:100vh;
+  background:
+    radial-gradient(circle at top,#073d70,#021225 55%,#010811);
+}
+header{
+  padding:18px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  border-bottom:1px solid #164d75;
+}
+.logo{
+  font-size:25px;
+  font-weight:900;
+  letter-spacing:2px;
+}
+.logo span{color:#00d9ff}
+main{
+  max-width:700px;
+  margin:auto;
+  padding:18px;
+}
+.card{
+  background:rgba(4,28,49,.88);
+  border:1px solid #17648c;
+  border-radius:18px;
+  padding:18px;
+  margin:14px 0;
+  box-shadow:0 10px 35px #0005;
+}
+h1,h2,h3{margin-top:0}
+input,textarea,select{
+  width:100%;
+  padding:14px;
+  margin:7px 0;
+  border-radius:12px;
+  border:1px solid #17648c;
+  background:#031a2c;
+  color:white;
+}
+button{
+  border:0;
+  border-radius:12px;
+  padding:13px 17px;
+  margin:5px 3px;
+  color:#fff;
+  background:#087db4;
+  font-weight:bold;
+}
+button.primary{background:#00a9dc}
+button.dark{background:#063653}
+button.danger{background:#813b52}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:10px;
+}
+.big{
+  font-size:28px;
+  font-weight:900;
+  color:#00d9ff;
+}
+.muted{color:#91b8ca}
+.hidden{display:none}
+.listing{
+  padding:13px;
+  margin:9px 0;
+  border:1px solid #15567c;
+  border-radius:14px;
+}
+.nav{
+  display:flex;
+  overflow:auto;
+  gap:7px;
+  padding:10px 0;
+}
+.nav button{white-space:nowrap}
+.badge{
+  display:inline-block;
+  background:#063c59;
+  padding:6px 10px;
+  border-radius:20px;
+  margin:3px;
+}
 </style>
 </head>
+
 <body>
 
 <header>
- <div class="brand">JR PHEEF</div>
- <div class="tag">Find. Match. Trade.</div>
+  <div class="logo">JR <span>PHEEF</span></div>
+  <button onclick="logout()">LOGOUT</button>
 </header>
-
-<div id="offline" class="offline hide">📴 OFFLINE — saved information remains available and will sync when connected.</div>
 
 <main>
 
 <section id="auth">
- <div class="card hero">
-  <div class="logo">JR PHEEF</div>
-  <h3>Find. Match. Trade.</h3>
-  <p class="muted">Buy • Sell • Work • Match • Chat • Deal • Deliver • Grow</p>
- </div>
 
- <div class="card">
-  <h2>Welcome back</h2>
-  <button class="btn" onclick="google()">Continue with Google</button>
-  <p class="muted">or use your JR PHEEF email</p>
-  <input id="email" type="email" placeholder="Email">
-  <input id="pass" type="password" placeholder="Password">
-  <button class="dark" onclick="login()">LOGIN</button>
- </div>
+<div class="card">
+<h1>Find. Match. Connect.</h1>
+<p class="muted">
+Your universal opportunity center.
+</p>
 
- <div class="card">
-  <h2>Create account</h2>
-  <input id="name" placeholder="Full real name">
-  <input id="se" type="email" placeholder="Email">
-  <input id="sp" type="password" placeholder="Password">
-  <input id="phone" placeholder="Phone">
-  <input id="year" type="number" placeholder="Birth year">
-  <input id="ref" placeholder="Referral code (optional)">
-  <label><input id="agree" type="checkbox" style="width:auto"> I agree to JR PHEEF Terms & Conditions</label>
-  <button class="btn" onclick="signup()">I AGREE & CONTINUE</button>
- </div>
+<div id="loginBox">
+<h2>Login</h2>
+
+<input id="loginIdentifier"
+placeholder="Phone or email">
+
+<div style="position:relative">
+<input id="loginPassword"
+type="password"
+placeholder="Password">
+<button onclick="toggle('loginPassword')">👁</button>
+</div>
+
+<button class="primary" onclick="login()">LOGIN</button>
+<button class="dark" onclick="showRegister()">CREATE ACCOUNT</button>
+
+<p id="loginMsg"></p>
+</div>
+
+<div id="registerBox" class="hidden">
+
+<h2>Create account</h2>
+
+<input id="regName" placeholder="Full name">
+<input id="regPhone" placeholder="07XXXXXXXX">
+<input id="regEmail" placeholder="Email">
+<input id="regBirth" placeholder="Birth year" type="number">
+
+<div style="position:relative">
+<input id="regPassword" type="password" placeholder="Password">
+<button onclick="toggle('regPassword')">👁</button>
+</div>
+
+<button class="primary" onclick="register()">CREATE ACCOUNT</button>
+<button class="dark" onclick="showLogin()">BACK TO LOGIN</button>
+
+<p id="regMsg"></p>
+
+</div>
+</div>
 </section>
 
-<section id="app" class="hide">
+<section id="app" class="hidden">
 
- <div class="card">
-  <b id="hello"></b>
-  <span id="net" class="pill">ONLINE</span>
- </div>
+<div class="nav">
+<button onclick="show('home')">HOME</button>
+<button onclick="show('find')">FIND</button>
+<button onclick="show('create')">CREATE</button>
+<button onclick="show('points')">POINTS</button>
+<button onclick="show('flex')">FLEX</button>
+<button onclick="show('profile')">PROFILE</button>
+</div>
 
- <div class="banner">
-  <h2>Find. Match. Trade.</h2>
-  <input id="search" placeholder="🔎 What are you looking for?">
-  <button class="aqua" onclick="market()">SEARCH</button>
- </div>
+<div id="home" class="page">
 
- <div id="home" class="page">
-  <div class="card"><h3>Discover & Deals</h3><div id="ads"></div></div>
-  <div class="card">
-   <h3>Choose your option</h3>
-   <div class="grid">
-    <button class="tile" onclick="page('market')"><b>🛒</b>Market</button>
-    <button class="tile" onclick="page('shorts')"><b>🎬</b>Shorts</button>
-    <button class="tile" onclick="page('work')"><b>💼</b>WORK</button>
-    <button class="tile" onclick="page('deals')"><b>🤝</b>Matches</button>
-    <button class="tile" onclick="page('deals')"><b>💬</b>Deal Rooms</button>
-    <button class="tile" onclick="page('delivery')"><b>🚚</b>Delivery</button>
-    <button class="tile" onclick="page('wallet')"><b>👛</b>Wallet</button>
-    <button class="tile" onclick="page('invest')"><b>📈</b>Invest</button>
-    <button class="tile" onclick="page('dgbo')"><b>🧠</b>DGBO</button>
-    <button class="tile" onclick="page('adsPage')"><b>📢</b>Advertise</button>
-    <button class="tile" onclick="page('profile')"><b>👤</b>Profile</button>
-   </div>
-  </div>
- </div>
+<div class="card">
+<h1 id="welcome"></h1>
+<p class="muted" id="dgbo"></p>
+</div>
 
- <div id="market" class="page hide">
-  <div class="card"><h2>🛒 MARKET</h2><input id="mq" placeholder="Search products, services or businesses"><button class="btn" onclick="loadMarket()">SEARCH</button></div>
-  <div id="marketList"></div>
-  <div class="card">
-   <h3>Sell</h3>
-   <input id="lt" placeholder="Title"><textarea id="ld" placeholder="Description"></textarea>
-   <input id="lp" type="number" placeholder="Price — above KSh 100">
-   <input id="ll" placeholder="Location"><input id="lc" placeholder="Country"><input id="lcat" placeholder="Category">
-   <input id="lf" type="file" multiple accept="image/*">
-   <button class="btn" onclick="sell()">PUBLISH — 3 TO 20 PHOTOS</button>
-  </div>
- </div>
+<div class="grid">
 
- <div id="shorts" class="page hide">
-  <div class="card">
-   <h2>🎬 JR PHEEF SHORTS</h2>
-   <p class="muted">Business • skills • products • ideas • education • entertainment</p>
-   <input id="sv" type="file" accept="video/*">
-   <textarea id="sc" placeholder="Caption"></textarea><input id="sct" placeholder="Category">
-   <button class="btn" onclick="short()">SUBMIT SHORT</button>
-   <p class="muted">🔐 Contact Shield blocks phone numbers, emails and off-platform contact sharing.</p>
-  </div>
-  <div id="shortList"></div>
- </div>
+<div class="card">
+<div class="big" id="pointsValue">0</div>
+<div>JR PHEEF Points</div>
+</div>
 
- <div id="work" class="page hide">
-  <div class="card">
-   <h2>💼 WORK</h2>
-   <input id="tt" placeholder="Task title"><textarea id="td" placeholder="Describe the task"></textarea>
-   <input id="tb" type="number" placeholder="Budget"><input id="tl" placeholder="Location"><input id="tsk" placeholder="Skill">
-   <button class="btn" onclick="task()">POST TASK</button>
-  </div>
-  <div class="card">
-   <h3>Freelancer / Talent</h3>
-   <input id="ws" placeholder="Skills"><input id="wl" placeholder="Location"><input id="we" placeholder="Experience">
-   <button class="btn" onclick="talent()">SAVE TALENT PROFILE</button>
-  </div>
-  <div id="tasks"></div><div id="talents"></div>
- </div>
+<div class="card">
+<div class="big">KSh 30</div>
+<div>5-hour access</div>
+</div>
 
- <div id="deals" class="page hide">
-  <div class="card"><h2>💬 DEAL ROOMS</h2><p class="muted">Normal conversation. Contact information stays protected.</p></div>
-  <div id="dealList"></div>
-  <div id="chat" class="card hide"><div id="msgs"></div><input id="message" placeholder="Write a message"><button class="btn" onclick="send()">SEND</button></div>
- </div>
+</div>
 
- <div id="delivery" class="page hide">
-  <div class="card"><h2>🚚 DELIVERY</h2>
-   <input id="pick" placeholder="Pickup"><input id="drop" placeholder="Destination">
-   <select id="prov"><option>JR PHEEF NETWORK</option><option>EXPRESS</option><option>STANDARD</option><option>ECONOMY</option><option>SCHEDULE</option><option>SELF PICKUP</option></select>
-   <button class="btn" onclick="deliver()">REQUEST DELIVERY</button>
-  </div>
-  <div class="card"><h3>📍 Live Tracking</h3><div style="height:200px;background:#E8EEF5;border-radius:14px;display:grid;place-items:center">Google Maps / live route</div></div>
- </div>
+<div class="card">
+<h2>Access</h2>
+<p id="accessText">Checking...</p>
 
- <div id="wallet" class="page hide">
-  <div class="card"><h2>👛 WALLET</h2><div class="grid"><div class="tile">Withdrawable<b id="cash">KSh 0</b></div><div class="tile">Growth Credits<b id="cred">KSh 0</b></div></div></div>
-  <div class="card"><h3>Withdraw</h3><input id="wa" type="number" placeholder="Minimum KSh 200"><input id="wp" placeholder="M-Pesa phone"><button class="btn" onclick="withdraw()">REQUEST</button></div>
- </div>
+<button class="primary" onclick="redeemPoints()">
+⭐ USE 30 POINTS
+</button>
 
- <div id="invest" class="page hide">
-  <div class="card"><h2>📈 JR PHEEF INVEST</h2><p>Growth Credits: <b id="ig"></b></p><p class="muted">Internal Growth Products — JR PHEEF & DGBO.</p></div>
-  <div id="products"></div><div id="holdings" class="card"></div>
- </div>
+<button onclick="show('flex')">
+💙 PHEEF FLEX
+</button>
+</div>
 
- <div id="dgbo" class="page hide">
-  <div class="card hero"><div class="logo">DGBO</div><h2>BUSINESS CENTER</h2><p class="muted">Ideas. Strategy. Growth.</p></div>
-  <div class="grid">
-   <button class="tile" onclick="dg('Business Idea')"><b>💡</b>Business Ideas</button>
-   <button class="tile" onclick="dg('Grow My Business')"><b>📈</b>Grow Business</button>
-   <button class="tile" onclick="dg('Business Plan')"><b>📋</b>Business Plan</button>
-   <button class="tile" onclick="dg('Funding')"><b>💰</b>Funding</button>
-   <button class="tile" onclick="dg('Business for Sale')"><b>🏢</b>Business for Sale</button>
-   <button class="tile" onclick="dg('Partnership')"><b>🤝</b>Partnership</button>
-  </div>
-  <div id="dgform" class="card hide"><h3 id="dgt"></h3><input id="dgo" placeholder="Title"><textarea id="dgd" placeholder="Explain"></textarea><input id="dga" type="number" placeholder="Amount"><input id="dgl" placeholder="Location"><input id="dgc" placeholder="Category"><button class="btn" onclick="sendDG()">SEND TO DGBO</button></div>
- </div>
+</div>
 
- <div id="adsPage" class="page hide">
-  <div class="card"><h2>📢 ADVERTISE</h2><input id="ac" placeholder="Business/company"><input id="ah" placeholder="Headline"><textarea id="ad" placeholder="Description"></textarea><input id="ao" placeholder="Offer"><input id="ab" type="number" placeholder="Daily budget"><input id="al" placeholder="Target location"><input id="aca" placeholder="Category"><button class="btn" onclick="ad()">SUBMIT CAMPAIGN</button></div>
- </div>
+<div id="find" class="page hidden">
 
- <div id="profile" class="page hide">
-  <div class="card"><h2>👤 PROFILE</h2><div id="prof"></div><h3>Theme</h3><div class="row">
-   <button class="btn" onclick="theme('blue')">🔵 Blue</button><button class="aqua" onclick="theme('aqua')">🩵 Aqua</button><button class="dark" onclick="theme('black')">⚫ Black</button><button class="btn" onclick="theme('green')">🟢 Green</button><button class="btn" onclick="theme('purple')">🟣 Purple</button><button class="btn" onclick="theme('gold')">🟡 Gold</button>
-  </div></div>
- </div>
+<div class="card">
+<h2>🔎 FIND</h2>
+
+<input id="searchQ" placeholder="What opportunity are you looking for?">
+
+<button class="primary" onclick="searchListings()">
+FIND
+</button>
+
+<div id="results"></div>
+</div>
+
+</div>
+
+<div id="create" class="page hidden">
+
+<div class="card">
+<h2>➕ CREATE OPPORTUNITY</h2>
+
+<input id="itemName" placeholder="What are you offering?">
+
+<select id="category">
+<option>Product</option>
+<option>Service</option>
+<option>Business</option>
+<option>Job</option>
+<option>Property</option>
+<option>Investment</option>
+<option>Event</option>
+</select>
+
+<input id="price" type="number" placeholder="Price">
+
+<input id="location" placeholder="Location">
+
+<textarea id="description"
+placeholder="Describe your opportunity"></textarea>
+
+<input id="photos" type="file" accept="image/*" multiple>
+
+<button class="primary" onclick="createListing()">
+CREATE
+</button>
+
+<p id="createMsg"></p>
+</div>
+
+</div>
+
+<div id="points" class="page hidden">
+
+<div class="card">
+<h2>⭐ JR PHEEF POINTS</h2>
+
+<div class="big" id="pointsBig">0</div>
+
+<p>
+Use <b>30 points</b> for 5 hours of marketplace access.
+</p>
+
+<button class="primary" onclick="redeemPoints()">
+REDEEM 30 POINTS
+</button>
+
+<p class="muted">
+Points are JR PHEEF rewards and are not cash withdrawals.
+</p>
+
+<p id="pointsMsg"></p>
+</div>
+
+</div>
+
+<div id="flex" class="page hidden">
+
+<div class="card">
+<h2>💙 PHEEF FLEX</h2>
+
+<p>
+Need marketplace access but don't have cash?
+</p>
+
+<div class="badge">PAY LATER</div>
+<div class="badge">OKOA</div>
+<div class="badge">FLEX</div>
+
+<p>
+PHEEF FLEX is being prepared for eligible members.
+</p>
+
+<p class="muted">
+Real credit is currently inactive. You can use JR PHEEF Points or pay for a normal access pass.
+</p>
+
+<input id="flexAmount"
+type="number"
+value="30"
+placeholder="Amount">
+
+<button onclick="requestFlex()">
+REQUEST FLEX
+</button>
+
+<p id="flexMsg"></p>
+</div>
+
+</div>
+
+<div id="profile" class="page hidden">
+
+<div class="card">
+<h2>PROFILE</h2>
+
+<input id="profileName" placeholder="Name">
+<input id="profileEmail" placeholder="Email">
+<input id="profileLocation" placeholder="Location">
+
+<textarea id="profileBio" placeholder="Bio"></textarea>
+
+<select id="profileTheme">
+<option value="ocean">Ocean</option>
+<option value="aurora">Aurora</option>
+<option value="glass">Glass</option>
+<option value="midnight">Midnight</option>
+<option value="sky">Sky</option>
+<option value="silk">Silk</option>
+</select>
+
+<button class="primary" onclick="saveProfile()">
+SAVE PROFILE
+</button>
+
+<p id="profileMsg"></p>
+</div>
+
+</div>
 
 </section>
+
 </main>
 
-<nav id="nav" class="hide">
-<button onclick="page('home')"><b>🏠</b>Home</button>
-<button onclick="page('market')"><b>🛒</b>Market</button>
-<button onclick="page('shorts')"><b>🎬</b>Shorts</button>
-<button onclick="page('work')"><b>💼</b>Work</button>
-<button onclick="page('deals')"><b>💬</b>Deals</button>
-<button onclick="page('wallet')"><b>👛</b>Wallet</button>
-<button onclick="page('invest')"><b>📈</b>Invest</button>
-<button onclick="page('dgbo')"><b>🧠</b>DGBO</button>
-</nav>
-
 <script>
-let T=localStorage.jrToken,U=null,R=null;
-const $=x=>document.getElementById(x),esc=x=>String(x??"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
-async function api(u,o={}){o.headers={...(o.headers||{}),Authorization:T?"Bearer "+T:"","Content-Type":"application/json"};let r=await fetch(u,o),d=await r.json();if(!r.ok)throw Error(d.error||"Error");return d}
-function msg(x){alert(x)}
-async function signup(){try{if(!$("agree").checked)return msg("Accept the Terms first.");let d=await api("/api/auth/signup",{method:"POST",body:JSON.stringify({name:$("name").value,email:$("se").value,password:$("sp").value,phone:$("phone").value,birth_year:$("year").value,referral_code:$("ref").value,terms_agreed:true})});T=d.token;localStorage.jrToken=T;start(d.user)}catch(e){msg(e.message)}}
-async function login(){try{let d=await api("/api/auth/login",{method:"POST",body:JSON.stringify({email:$("email").value,password:$("pass").value})});T=d.token;localStorage.jrToken=T;start(d.user)}catch(e){msg(e.message)}}
-async function google(){let d=await api("/api/auth/google");location=d.url}
-async function start(u){U=u;$("auth").classList.add("hide");$("app").classList.remove("hide");$("nav").classList.remove("hide");$("hello").textContent="Hi, "+u.name+" 👋";profile();home()}
-function page(x){document.querySelectorAll(".page").forEach(e=>e.classList.add("hide"));$(x).classList.remove("hide");if(x=="market")loadMarket();if(x=="shorts")loadShorts();if(x=="work"){loadTasks();loadTalent()}if(x=="deals")loadDeals();if(x=="wallet")wallet();if(x=="invest")invest();if(x=="profile")profile();scrollTo(0,0)}
-async function home(){try{$("ads").innerHTML=(await api("/api/ads")).data.map(a=>`<div class="card"><span class="pill">SPONSORED</span><h3>${esc(a.headline||a.company)}</h3><p>${esc(a.description||"")}</p></div>`).join("")||"<p class=muted>No promotions yet.</p>"}catch{}}
-function market(){$("mq").value=$("search").value;page("market")}
-async function loadMarket(){try{let d=await api("/api/listings?q="+encodeURIComponent($("mq").value||""));$("marketList").innerHTML=d.data.map(x=>`<div class="card"><span class=pill>${esc(x.category||"MARKET")}</span><h3>${esc(x.title)}</h3><p>${esc(x.description)}</p><div class=price>KSh ${Number(x.price).toLocaleString()}</div><p class=muted>📍 ${esc(x.location||"")}</p><button class=btn onclick="connect('${x.user_id}','${x.id}')">MATCH / CHAT</button></div>`).join("")||"<div class=card>Nothing found.</div>"}catch(e){msg(e.message)}}
-async function connect(s,l){try{await api("/api/deals",{method:"POST",body:JSON.stringify({seller_id:s,listing_id:l})});page("deals")}catch(e){msg(e.message)}}
-async function files(ids,folder){let out=[];for(let f of $(ids).files){let d=await new Promise(r=>{let x=new FileReader();x.onload=()=>r(x.result);x.readAsDataURL(f)});out.push((await api("/api/upload",{method:"POST",body:JSON.stringify({data:d,name:f.name,type:f.type,folder})})).url)}return out}
-async function sell(){try{let im=await files("lf","listings");if(im.length<3||im.length>20)throw Error("Choose 3 to 20 photos.");await api("/api/listings",{method:"POST",body:JSON.stringify({title:$("lt").value,description:$("ld").value,price:Number($("lp").value),location:$("ll").value,country:$("lc").value,category:$("lcat").value,images:im})});msg("Listing published.");loadMarket()}catch(e){msg(e.message)}}
-async function short(){try{let im=await files("sv","shorts");if(im.length!=1)throw Error("Choose one video.");await api("/api/shorts",{method:"POST",body:JSON.stringify({video_url:im[0],caption:$("sc").value,category:$("sct").value})});msg("Short submitted for review.")}catch(e){msg(e.message)}}
-async function loadShorts(){try{let d=await api("/api/shorts");$("shortList").innerHTML=d.data.map(x=>`<div class=card><video controls src="${esc(x.video_url)}"></video><p>${esc(x.caption)}</p></div>`).join("")||"<div class=card>No approved Shorts yet.</div>"}catch{}}
-async function task(){try{await api("/api/tasks",{method:"POST",body:JSON.stringify({title:$("tt").value,description:$("td").value,budget:Number($("tb").value),location:$("tl").value,skill:$("tsk").value})});msg("Task posted.")}catch(e){msg(e.message)}}
-async function loadTasks(){try{$("tasks").innerHTML=(await api("/api/tasks")).data.map(x=>`<div class=card><b>${esc(x.title)}</b><p>${esc(x.description)}</p><span class=pill>${esc(x.status)}</span></div>`).join("")}catch{}}
-async function talent(){try{await api("/api/talent",{method:"POST",body:JSON.stringify({skills:$("ws").value,location:$("wl").value,experience:$("we").value})});msg("Talent profile saved.")}catch(e){msg(e.message)}}
-async function loadTalent(){try{$("talents").innerHTML=(await api("/api/talent")).data.map(x=>`<div class=card><b>Freelancer</b><p>${esc(x.skills)}</p><p>${esc(x.location)}</p></div>`).join("")}catch{}}
-async function loadDeals(){try{$("dealList").innerHTML=(await api("/api/deals")).data.map(x=>`<div class=card><span class=pill>${esc(x.status)}</span><button class=btn onclick="openRoom('${x.id}')">OPEN DEAL ROOM</button></div>`).join("")||"<div class=card>No Deal Rooms.</div>"}catch{}}
-async function openRoom(id){R=id;$("chat").classList.remove("hide");loadMessages()}
-async function loadMessages(){$("msgs").innerHTML=(await api("/api/deals/"+R+"/messages")).data.map(x=>`<div class="msg ${x.sender_id==U.id?"mine":""}">${esc(x.message)}</div>`).join("")}
-async function send(){let m=$("message").value.trim();if(!m)return;try{await api("/api/deals/"+R+"/messages",{method:"POST",body:JSON.stringify({message:m})});$("message").value="";loadMessages()}catch(e){msg(e.message)}}
-async function deliver(){try{await api("/api/delivery",{method:"POST",body:JSON.stringify({pickup:$("pick").value,dropoff:$("drop").value,provider:$("prov").value})});msg("Delivery requested.")}catch(e){msg(e.message)}}
-async function wallet(){try{let d=await api("/api/wallet");$("cash").textContent="KSh "+d.cash.toLocaleString();$("cred").textContent="KSh "+d.credits.toLocaleString()}catch{}}
-async function withdraw(){try{await api("/api/withdraw",{method:"POST",body:JSON.stringify({amount:Number($("wa").value),phone:$("wp").value})});msg("Withdrawal pending confirmation.")}catch(e){msg(e.message)}}
-async function invest(){try{let d=await api("/api/invest");$("ig").textContent="KSh "+d.growth_credits.toLocaleString();$("products").innerHTML=d.products.map(x=>`<div class=card><h3>${esc(x.name)}</h3><p>${esc(x.description||"")}</p><p>Unit: KSh ${Number(x.unit_price).toLocaleString()}</p><span class=pill>${esc(x.status)}</span>${x.active?`<button class=btn onclick="buy('${x.id}')">INVEST</button>`:""}</div>`).join("")+["NSE","Global Stocks","ETFs","Funds","Bonds"].map(x=>`<div class=card>🔒 ${x}<p class=muted>INACTIVE</p></div>`).join("");$("holdings").innerHTML="<h3>Your Holdings</h3>"+d.holdings.map(x=>`<p>${Number(x.units).toFixed(4)} units — KSh ${Number(x.current_value||0).toLocaleString()}</p>`).join("")}catch{}}
-async function buy(id){let a=prompt("Amount from Growth Credits:");if(!a)return;if(!confirm("Confirm KSh "+a+" investment?"))return;try{await api("/api/invest/buy",{method:"POST",body:JSON.stringify({product_id:id,amount:Number(a)})});msg("Investment recorded.");invest();wallet()}catch(e){msg(e.message)}}
-function dg(x){$("dgform").classList.remove("hide");$("dgt").textContent=x}
-async function sendDG(){try{await api("/api/dgbo/opportunities",{method:"POST",body:JSON.stringify({title:$("dgo").value,description:$("dgd").value,amount:Number($("dga").value),location:$("dgl").value,category:$("dgc").value,type:$("dgt").textContent})});msg("Sent to DGBO for review.")}catch(e){msg(e.message)}}
-async function ad(){try{await api("/api/ads",{method:"POST",body:JSON.stringify({company:$("ac").value,headline:$("ah").value,description:$("ad").value,offer:$("ao").value,daily_budget:Number($("ab").value),target_location:$("al").value,target_category:$("aca").value})});msg("Advertising campaign submitted.")}catch(e){msg(e.message)}}
-function profile(){$("prof").innerHTML=`<p><b>Name:</b> ${esc(U.name)}</p><p><b>Email:</b> ${esc(U.email||"")}</p><p><b>Phone:</b> ${esc(U.phone||"")}</p><p><b>Membership:</b> ${esc(U.membership||"FREE+")}</p>`}
-function theme(x){let c={blue:["#087CFF","#00C2FF"],aqua:["#00C2FF","#087CFF"],black:["#111","#000"],green:["#13A65A","#087CFF"],purple:["#7C3AED","#087CFF"],gold:["#B8860B","#061A33"]}[x];if(!c)return;document.documentElement.style.setProperty("--blue",c[0]);document.documentElement.style.setProperty("--aqua",c[1]);localStorage.jrTheme=x}
-function net(){let o=!navigator.onLine;$("offline").classList.toggle("hide",!o);$("net").textContent=o?"OFFLINE":"ONLINE"}
-window.addEventListener("online",net);window.addEventListener("offline",net);
-(async()=>{theme(localStorage.jrTheme||"blue");net();let p=new URLSearchParams(location.search);if(p.get("token")){T=p.get("token");localStorage.jrToken=T;history.replaceState({}, "", "/")}if(T)try{let d=await api("/api/me");start(d.user)}catch{localStorage.removeItem("jrToken");T=null}})();
+let me=null;
+
+function $(id){
+  return document.getElementById(id);
+}
+
+function toggle(id){
+  const x=$(id);
+  x.type=x.type==="password"?"text":"password";
+}
+
+function showRegister(){
+  $("loginBox").classList.add("hidden");
+  $("registerBox").classList.remove("hidden");
+}
+
+function showLogin(){
+  $("registerBox").classList.add("hidden");
+  $("loginBox").classList.remove("hidden");
+}
+
+function show(id){
+  document.querySelectorAll(".page")
+    .forEach(x=>x.classList.add("hidden"));
+
+  $(id).classList.remove("hidden");
+
+  if(id==="points") refresh();
+  if(id==="home") refresh();
+}
+
+async function api(url,options={}){
+  const r=await fetch(url,{
+    credentials:"include",
+    ...options
+  });
+
+  return r.json();
+}
+
+async function login(){
+
+  const data=await api("/api/login",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+      identifier:$("loginIdentifier").value,
+      password:$("loginPassword").value
+    })
+  });
+
+  if(!data.ok){
+    $("loginMsg").textContent=data.error;
+    return;
+  }
+
+  me=data.member;
+  openApp();
+}
+
+async function register(){
+
+  const data=await api("/api/register",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+      full_name:$("regName").value,
+      phone:$("regPhone").value,
+      email:$("regEmail").value,
+      birth_year:$("regBirth").value,
+      password:$("regPassword").value
+    })
+  });
+
+  $("regMsg").textContent=data.ok
+    ? "Account created. Please login."
+    : data.error;
+
+  if(data.ok) showLogin();
+}
+
+async function openApp(){
+
+  $("auth").classList.add("hidden");
+  $("app").classList.remove("hidden");
+
+  $("welcome").textContent=
+    "Hello, "+(me.full_name||"Member");
+
+  $("dgbo").textContent=
+    me.dgbo_id||"JR PHEEF MEMBER";
+
+  fillProfile();
+
+  await refresh();
+}
+
+function fillProfile(){
+
+  $("profileName").value=me.full_name||"";
+  $("profileEmail").value=me.email||"";
+  $("profileLocation").value=me.location||"";
+  $("profileBio").value=me.bio||"";
+  $("profileTheme").value=me.theme||"ocean";
+}
+
+async function refresh(){
+
+  const data=await api("/api/me");
+
+  if(!data.logged_in) return;
+
+  me=data.member;
+
+  const points=Number(me.reward_points||0);
+
+  $("pointsValue").textContent=points;
+  $("pointsBig").textContent=points;
+
+  const access=await api("/api/access");
+
+  if(access.allowed){
+
+    $("accessText").textContent=
+      access.reason==="FREE_WINDOW"
+      ? "FREE ACCESS — 02:00 to 06:00 EAT"
+      : "Your marketplace access is active.";
+
+  }else{
+
+    $("accessText").textContent=
+      "KSh 30 = 5 hours, or redeem 30 points.";
+  }
+
+  fillProfile();
+}
+
+async function redeemPoints(){
+
+  const data=await api("/api/points/redeem-access",{
+    method:"POST"
+  });
+
+  if(data.ok){
+
+    $("pointsMsg").textContent=
+      data.message;
+
+    await refresh();
+
+    show("home");
+
+  }else{
+
+    $("pointsMsg").textContent=
+      data.error;
+  }
+}
+
+async function searchListings(){
+
+  const q=encodeURIComponent($("searchQ").value);
+
+  const data=await api("/api/listings?q="+q);
+
+  if(!data.ok){
+
+    $("results").innerHTML=
+      `<div class="listing">${data.error}<br><br>
+      KSh 30 = 5 hours or redeem 30 points.
+      </div>`;
+
+    return;
+  }
+
+  $("results").innerHTML=
+    (data.listings||[]).map(x=>`
+      <div class="listing">
+        <b>${escapeHtml(x.item_name||"Opportunity")}</b>
+        <br>
+        KSh ${Number(x.price||0).toLocaleString()}
+        <br>
+        📍 ${escapeHtml(x.location||"")}
+        <br>
+        ${escapeHtml(x.description||"")}
+      </div>
+    `).join("") ||
+    "<p>No opportunities found yet.</p>";
+}
+
+async function createListing(){
+
+  const form=new FormData();
+
+  form.append("item_name",$("itemName").value);
+  form.append("category",$("category").value);
+  form.append("price",$("price").value);
+  form.append("location",$("location").value);
+  form.append("description",$("description").value);
+
+  for(const file of $("photos").files){
+    form.append("photos",file);
+  }
+
+  const data=await api("/api/listings",{
+    method:"POST",
+    body:form
+  });
+
+  $("createMsg").textContent=
+    data.ok
+    ? "Opportunity created successfully."
+    : data.error;
+}
+
+async function requestFlex(){
+
+  const data=await api("/api/flex/request",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+      amount:$("flexAmount").value
+    })
+  });
+
+  $("flexMsg").textContent=
+    data.message||data.error;
+}
+
+async function saveProfile(){
+
+  const data=await api("/api/profile",{
+    method:"PUT",
+    headers:{
+      "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+      full_name:$("profileName").value,
+      email:$("profileEmail").value,
+      location:$("profileLocation").value,
+      bio:$("profileBio").value,
+      theme:$("profileTheme").value
+    })
+  });
+
+  $("profileMsg").textContent=
+    data.ok
+    ? "Profile updated."
+    : data.error;
+
+  if(data.ok){
+    me=data.member;
+    await refresh();
+  }
+}
+
+async function logout(){
+
+  await api("/api/logout",{
+    method:"POST"
+  });
+
+  location.reload();
+}
+
+function escapeHtml(value){
+
+  return String(value||"")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#039;");
+}
+
+(async function(){
+
+  const data=await api("/api/me");
+
+  if(data.logged_in){
+
+    me=data.member;
+    openApp();
+
+  }
+
+})();
 </script>
+
 </body>
-    </html>
+ </html>
